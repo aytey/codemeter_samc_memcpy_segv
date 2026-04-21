@@ -8,6 +8,8 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 | file | purpose |
 |---|---|
 | `repro_prefixed_hello.py` | deterministic one-packet reproducer for the isolated crash |
+| `repro_prefixed_hello_standalone.py` | same HELLO reproducer as a single file; no project-local imports or data files |
+| `repro_ack_0x5e.py` | ACK-side two-frame reproducer candidate: normal HELLO, then crafted opcode-`0x5e` ACK |
 | `samc_light_supervisor.py` | high-throughput 16-worker attribution harness with per-worker ring dumps |
 | `samc_fuzz.py` | main fuzzer loop; stateful session replay with per-iteration mutation |
 | `samc_session_data.py` | canonical cleartext plaintexts captured from a real testbench session |
@@ -42,6 +44,25 @@ python3 repro_prefixed_hello.py
 
 This intentionally crashes the daemon by sending a single valid encrypted
 SAMC HELLO whose cleartext is prefixed with `5e355ed6f2`.
+
+Standalone version with no project-local imports:
+
+```bash
+python3 repro_prefixed_hello_standalone.py
+```
+
+Use `--dry-run` to construct and print the packet summary without sending it.
+
+ACK-side candidate reproducer:
+
+```bash
+python3 repro_ack_0x5e.py
+```
+
+This sends a normal fresh-token HELLO, extracts the returned SID, patches it
+into the canonical ACK, then prepends one of the captured opcode-`0x5e` ACK
+prefixes before sending the ACK. Use `--prefix 5e` or another hex prefix to
+test minimization candidates.
 
 Single instance:
 
