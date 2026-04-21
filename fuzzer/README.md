@@ -17,6 +17,7 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 | `run_samc_fuzz_parallel.sh` | launches N concurrent workers (default 16) |
 | `fuzz_farm_launcher.py` | host-side driver for multi-farm namespaced fuzzing with crash-signature bucketing and auto-restart |
 | `fuzz_farm_namespace_init.sh` | PID-1 init script each farm's namespace runs; mounts, starts daemon, execs supervisor |
+| `remote_cm_fuzz_launcher.py` | remote daemon-to-server protocol fuzzer with SSH-based target crash monitoring |
 
 For the multi-daemon scale-out design and what the first 1-hour 8×10 run
 revealed, see [`../MULTI_INSTANCE_FUZZING.md`](../MULTI_INSTANCE_FUZZING.md).
@@ -89,6 +90,23 @@ python3 samc_light_supervisor.py \
   --seed-base 0xC0D30000 \
   --timeout 900
 ```
+
+Remote CodeMeter server protocol fuzzing from one host against another:
+
+```bash
+python3 remote_cm_fuzz_launcher.py \
+  --target-host vistrrdslin0004.vi.vector.int \
+  --ssh-host vistrrdslin0004.vi.vector.int \
+  --workers 4 \
+  --iterations 100000 \
+  --mode query0031
+```
+
+This exercises the daemon-to-server ECDH protocol, starts each worker with a
+valid auth/init exchange, fuzzes encrypted `0x0031` query records by default,
+and watches the remote `CodeMeterLin` PID/core state over SSH. Use
+`--mode auth0021` for pre-auth 32-byte record fuzzing or `--mode mixed` to
+blend both.
 
 ## What it does per iteration
 
