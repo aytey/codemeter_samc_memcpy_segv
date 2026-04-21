@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Raw core dumps are too large to version. Share out of band if needed.
+core.CodeMeterLin.*
+*.core

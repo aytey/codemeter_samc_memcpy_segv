@@ -1,0 +1,77 @@
+Annotated disassembly around the crashing memcpy.
+File: /usr/sbin/CodeMeterLin (sha256 6bf82aa0…9917, CodeMeter 8.40.7154-505)
+
+The SIGSEGV is in libc's __memmove_evex_unaligned_erms; the return address
+recorded on the stack is 0x0000562a870f431d (= CodeMeterLin + 0x8f431d), i.e.
+the instruction right after the `call memcpy@plt`.
+
+======================================================================
+Where the length %rbx is computed
+======================================================================
+
+  8f41c6:  48 89 eb               mov   %rbp, %rbx          ; rbx = rbp  (source end)
+  8f41c9:  4c 29 e3               sub   %r12, %rbx          ; rbx = rbp - r12  = source_end - source_begin
+                                                            ; <<< THIS is where the 0x612b09cb
+                                                            ;     length came from in the crash core.
+                                                            ;     r12 = 0x7ff0ac00db74 (valid)
+                                                            ;     rbp = 0x7ff10d2be53f (NOT MAPPED)
+                                                            ;     rbp - r12 = 0x612b09cb  (1.63 GB)
+
+  8f41cc:  80 3d 55 7a 7d 01 00   cmpb  $0x0, 0x17d7a55(%rip)   ; check global bool at rip+...
+  8f41d3:  0f 85 1d 01 00 00      jne   8f42f6                  ; if flag set, skip the cheap path
+                                                                 ; and go straight to alloc+memcpy.
+
+======================================================================
+Cheap path: if the destination container already has capacity for the
+incoming range, copy in place. Otherwise, fall through to +0x8f42f6.
+======================================================================
+
+  8f41d9:  4d 8b 75 00            mov   (%r13), %r14         ; r14 = destination->_M_start
+  8f41dd:  49 8b 45 10            mov   0x10(%r13), %rax     ; rax = destination->_M_end_of_storage
+  8f41e1:  4c 29 f0               sub   %r14, %rax           ; rax = total capacity (bytes)
+  8f41e4:  48 39 c3               cmp   %rax, %rbx
+  8f41e7:  0f 87 09 01 00 00      ja    8f42f6                ; length > capacity → grow path
+  …                                                             (copy-in-place code follows)
+
+======================================================================
+Grow path — this is where the crash happens
+======================================================================
+
+  8f42f6:  48 85 db               test  %rbx, %rbx
+  8f42f9:  0f 88 20 08 00 00      js    8f4b1f                ; ONLY guard: signed-negative
+  8f42ff:  48 89 df               mov   %rbx, %rdi            ; alloc(length)
+  8f4302:  e8 69 f8 ff ff         call  8f3b70                ; internal allocator
+                                                               ; (wraps operator new[] / malloc)
+  8f4307:  49 89 c6               mov   %rax, %r14            ; r14 = destination base
+  8f430a:  4c 39 e5               cmp   %r12, %rbp
+  8f430d:  74 0e                  je    8f431d                ; skip memcpy if begin == end
+  8f430f:  4c 89 f7               mov   %r14, %rdi            ; memcpy(dst, src, len)
+  8f4312:  4c 89 e6               mov   %r12, %rsi
+  8f4315:  48 89 da               mov   %rbx, %rdx
+  8f4318:  e8 e3 89 ab ff         call  3acd00 <memcpy@plt>   ; <<< SIGSEGV inside libc
+  8f431d:  4d 8d 65 10            lea   0x10(%r13), %r12       ; return address seen in all cores
+  …
+
+======================================================================
+Key observations
+======================================================================
+
+1. The length passed to memcpy is ALWAYS rbp - r12 on the grow path.
+   It is not an attacker-supplied length field read from the packet —
+   it is the byte-span of a source range described by two pointers.
+
+2. r12 (source begin) is valid at crash time; rbp (source end) is NOT
+   mapped. The length is the subtraction of a good pointer from a bad
+   pointer.
+
+3. The ONLY check on rbx before use is `js 8f4b1f` (signed-negative). Any
+   positive result, including obviously-bogus multi-GB values, proceeds
+   to allocate + memcpy.
+
+4. The allocator at +0x8f3b70 succeeds for ~1.6 GB requests on a typical
+   build host, so DoS is the lightest plausible outcome. If rbp is
+   attacker-influenceable through a torn read / stale pointer / upstream
+   computation, downstream impact may be worse: this is effectively
+   "memcpy a large range from an attacker-influenced source-end pointer"
+   which is a candidate for out-of-bounds read leaking adjacent memory
+   into the freshly allocated destination buffer.

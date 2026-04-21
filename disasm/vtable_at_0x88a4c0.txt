@@ -1,0 +1,10 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+Contents of section .text:
+ 88a4c0 83f00841 83e10801 c2428d14 4a83c2f0  ...A.....B..J...
+ 88a4d0 4863c64c 8b4c2408 498d0c81 49630481  Hc.L.L$.I...Ic..
+ 88a4e0 4801c8e9 6dffffff 48c74424 08000000  H...m...H.D$....
+ 88a4f0 000f57c0 0f294424 2048c744 24300000  ..W..)D$ H.D$0..
+ 88a500 0000488d 7c243fe8 f43d0000 4989c748  ..H.|$?..=..I..H
+ 88a510 8b3d7a16 84014889 c6e8f23d 0000488b  .=z...H....=..H.

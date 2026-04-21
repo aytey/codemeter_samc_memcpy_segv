@@ -5,37 +5,64 @@
 **Target**: `CodeMeter-8.40.7154-505.x86_64` (CodeMeterLin build 8.40e of 2026-Mar-06 / Build 7154)
 **Binary sha256**: `6bf82aa09b7f9696b4bf7535a7cb9a2fee62be5220952f2c237b6c73cbe09917`
 **Host OS**: openSUSE Tumbleweed (Kernel 6.19.3-1-default), x86_64
-**Status**: Reliably reproduced under concurrent-session fuzzing; single-session
-           deterministic repro not yet isolated (see "Reproducibility" below).
+**Status**: Reliably reproduced under concurrent-session fuzzing
+           (~1 daemon SIGSEGV per 4–5 min of 16-client fuzz; 0/10 random
+           single-input replays — strongly consistent with a state-dependent
+           or range-inconsistency bug rather than a one-packet trigger).
+
+> **Updated 2026-04-21** after full-memory core analysis. See
+> [`TRIAGE.md`](TRIAGE.md) for the revised root cause; the original
+> "memcpy length is an attacker-supplied field" framing below has been
+> corrected. TL;DR: the memcpy length is the difference of two pointers,
+> `%rbp - %r12`, one of which is valid and one of which points into a
+> no-access reservation. It's a *bad source-end pointer*, not a bad
+> length field.
 
 ## Summary
 
 The CodeMeter daemon (`/usr/sbin/CodeMeterLin`) crashes with `SIGSEGV` inside
-`__memcpy_evex_unaligned_erms` (libc) when processing samc-protocol requests
-from concurrent clients. All observed crashes share the same return address
-`CodeMeterLin + 0x8f431d`, indicating a single bug site.
+`__memcpy_evex_unaligned_erms` (libc, reached via `memcpy@plt`) when
+processing samc-protocol requests from concurrent clients. All observed
+crashes share the same return address `CodeMeterLin + 0x8f431d`, indicating
+a single bug site.
 
-Disassembly around the crash point shows a memcpy whose length (`%rbx`) is
-validated only against a signed-negative case; the caller does not bound the
-length against any reasonable maximum, and does not verify it against the
-source buffer size.
+The memcpy length in `%rbx` is computed by
+`CodeMeterLin+0x8f41c6..0x8f41c9` as a pointer difference:
 
 ```
- 8f42f6:  test %rbx, %rbx
- 8f42f9:  js   8f4b1f               ; only rejects signed-negative lengths
- 8f42ff:  mov  %rbx, %rdi           ; use %rbx as allocation size
- 8f4302:  call 8f3b70               ; allocator → dst ptr in %rax
- 8f4307:  mov  %rax, %r14
- 8f430a:  cmp  %r12, %rbp
- 8f430d:  je   8f431d
- 8f430f:  mov  %r14, %rdi           ; memcpy dst
- 8f4312:  mov  %r12, %rsi           ; memcpy src
- 8f4315:  mov  %rbx, %rdx           ; memcpy len (no upper bound)
- 8f4318:  call 3acd00 <memcpy@plt>  ; <<< SEGV in libc memcpy
- 8f431d:  …                         ; return address observed in all cores
+ 8f41c6:  mov   %rbp, %rbx           ; rbx = source_end
+ 8f41c9:  sub   %r12, %rbx           ; rbx = source_end - source_begin   <<< length
+ …
+ 8f42f6:  test  %rbx, %rbx
+ 8f42f9:  js    8f4b1f               ; ONLY guard before use: signed-negative
+ 8f42ff:  mov   %rbx, %rdi           ; alloc(length)
+ 8f4302:  call  8f3b70
+ 8f4307:  mov   %rax, %r14
+ 8f430a:  cmp   %r12, %rbp
+ 8f430d:  je    8f431d               ; skip if empty range
+ 8f430f:  mov   %r14, %rdi           ; memcpy(dst = alloc result,
+ 8f4312:  mov   %r12, %rsi           ;        src = source_begin,
+ 8f4315:  mov   %rbx, %rdx           ;        len = rbp - r12)
+ 8f4318:  call  3acd00 <memcpy@plt>  ; <<< SEGV inside libc
+ 8f431d:  …                          ; return address observed in every core
 ```
 
-Full disassembly: [`disasm/crash_site_0x8f431d.txt`](disasm/crash_site_0x8f431d.txt)
+In the captured core, `%r12 = 0x7ff0ac00db74` points inside a valid
+heap mapping `[0x7ff0ac000000, 0x7ff0aca48000)`, but `%rbp =
+0x7ff10d2be53f` is in a non-access reservation region — i.e. `%rbp`
+isn't a real pointer. The subtraction yields
+`0x612b09cb = 1,630,210,507 bytes`, which the allocator happily
+satisfies, and memcpy then walks off the end of the source mapping at
+`0x7ff0aca48000 + 0xba4 = 0x7ff0aca48ba4` — the fault address.
+
+**The bug is therefore not "trust the length field from the packet"
+but "compute a length from two pointers without validating that both
+pointers describe a consistent range."** The fix direction changes
+accordingly: not a bounds-check on a size field, but a range-validity
+check on the `%rbp` pointer before the subtraction at `+0x8f41c9`.
+
+Full annotated call site: [`disasm/memcpy_call_site_annotated.txt`](disasm/memcpy_call_site_annotated.txt)
+Full objdump excerpt: [`disasm/crash_site_0x8f431d.txt`](disasm/crash_site_0x8f431d.txt)
 
 ## Crashing stack (representative)
 
@@ -90,13 +117,24 @@ detection. Only a small fraction of these are the actual trigger, and even
 the guilty worker may have been several iterations past the trigger by the
 time it noticed.
 
-The non-deterministic single-input replay strongly suggests this is a
-**race / state-dependent bug** rather than a single-message vulnerability.
-Plausible mechanisms include:
+The non-deterministic single-input replay is consistent with this being
+a **state-dependent / range-inconsistency bug** rather than a single-
+message vulnerability. Combined with the core-dump finding that `%rbp`
+holds a non-mapped pointer, the most likely mechanisms are:
 
-- a shared buffer / allocator state corrupted by concurrent sessions,
-- heap layout-sensitive out-of-bounds read inside the memcpy source buffer,
-- accumulated state in the dispatcher at `+0x87647e`.
+- a concurrently-modified source container: `%r12` and `%rbp` are loaded
+  from an object's `_M_start`/`_M_finish` (or equivalent span fields) in
+  non-atomic fashion, and another thread has since mutated or freed the
+  container.
+- a pair of offsets / pointers into a packet buffer where the end-offset
+  is computed without bound-checking against the allocation, allowing
+  the parser to believe the range is much larger than it actually is.
+- an upstream "advance the end pointer by N" operation whose N came
+  from an attacker-influenced field and was not bounded.
+
+[`TRIAGE.md`](TRIAGE.md) elaborates. The advisor document
+[`NEXT_STEPS_PROCESS.md`](NEXT_STEPS_PROCESS.md) gives a staged reduction
+plan for narrowing it further.
 
 ## Fuzzing methodology
 
@@ -124,36 +162,59 @@ is configured for network-facing use
 `BindAddress=0.0.0.0`), the impact extends to any host on the network
 with TCP access to the port.
 
-Given the bug is a memcpy with an apparently attacker-influenced length,
-further analysis should consider whether a crafted concurrent session can
-turn this into an out-of-bounds write (code execution) rather than just an
-out-of-bounds read (DoS).
+Because the memcpy walks off the end of the *source* mapping (not the
+destination), the immediate impact is a crash / DoS — there is no
+attacker-controlled write here. However:
+
+- The memcpy copies arbitrary adjacent memory into a newly-allocated
+  heap buffer up until the point of fault, which in principle leaks
+  post-`%rsi` bytes to whichever code consumes the destination. Whether
+  the destination buffer is later serialised back to the attacker over
+  the samc channel is a question only the source can answer.
+- If the upstream computation that produces `%rbp` is itself
+  attacker-steerable to in-range-but-wrong values, a smaller bogus
+  length could avoid the SEGV and produce an OOB read leak with no
+  crash.
 
 ## Files in this package
 
 ```
-README.md                   this file
+README.md                              this file
+TRIAGE.md                              revised root cause from full-memory core
+NEXT_STEPS_PROCESS.md                  reduction methodology (concurrent-bug
+                                       triage playbook)
 disasm/
-  crash_site_0x8f431d.txt   objdump around the crash instruction
+  crash_site_0x8f431d.txt              objdump around the crash instruction
+  memcpy_call_site_annotated.txt       annotated call-site (NEW; shows
+                                       rbx = rbp - r12)
+  vtable_at_0x88a4c0.txt               raw bytes of the parsing object's
+                                       vtable
+  vtable_slot0_destructor_at_0x8f3c40.txt
+                                       the class destructor — identifies
+                                       four std::vector members + base
+                                       class inheritance
 triage/
-  stack_traces/             coredumpctl info output, all 10 cores
-  fuzz_logs/                fuzzer event logs (grep '[CRASH]' entries)
+  stack_traces/                        coredumpctl info output, all 10 cores
+  fuzz_logs/                           fuzzer event logs (grep '[CRASH]' entries)
 seeds/
-  samc_session_data.py      canonical cleartext plaintexts of a real session
-  crash_inputs_sample/      24 representative crash-adjacent inputs
+  samc_session_data.py                 canonical cleartext plaintexts of a
+                                       real session
+  crash_inputs_sample/                 24 representative crash-adjacent inputs
 fuzzer/
-  samc_fuzz.py              stateful fuzzer main
-  samc_session_data.py      session plaintexts (shared copy)
-  samc_replay.py            single-input replay harness
-  run_samc_fuzz_parallel.sh 16-worker launcher
-  README.md                 tool overview
+  samc_fuzz.py                         stateful fuzzer main
+  samc_session_data.py                 session plaintexts (shared copy)
+  samc_replay.py                       single-input replay harness
+  run_samc_fuzz_parallel.sh            16-worker launcher
+  README.md                            tool overview
 ```
 
 ## What's **not** included (on purpose)
 
 - `/usr/sbin/CodeMeterLin` — Wibu's copyrighted binary; you have the source.
-- Core dump `.zst` files — contain internal process memory; available
-  on request.
+- Full-memory core dumps (~1.9 GB each). Available on request; they
+  contain internal process memory including any recently-decrypted
+  plaintext from all 16 concurrent sessions, so out-of-band transfer
+  is preferred.
 - Cracked crypto keys / derivation artefacts from the Vector research
   (`ax_decrypt` repository) — not needed for triage; the fuzzer uses only
   the public time-derived KDF.
