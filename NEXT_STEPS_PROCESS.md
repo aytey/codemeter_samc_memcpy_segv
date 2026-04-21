@@ -1,5 +1,58 @@
 # Next Steps: Reducing the `CodeMeterLin + 0x8f431d` Crash
 
+## Completed Result
+
+This process has now produced a deterministic single-packet reproducer.
+
+The trigger is not a concurrent-session race and not a `0x64` request. It is a
+malformed HELLO whose cleartext is the canonical HELLO prefixed with five
+bytes:
+
+```text
+5e 35 5e d6 f2 || canonical HELLO with fresh client token
+```
+
+The prefixed HELLO starts:
+
+```text
+5e 35 5e d6 f2 0a 00 00 00 00 00 00 10 00 00 28
+```
+
+The vulnerable parser later reads those bytes as:
+
+```text
+0xd65e355e  0x00000af2  0x00000000  0x28000010
+```
+
+`0x28000010` is stored at `this + 0x68` and reaches the `memcpy` length at
+`CodeMeterLin + 0x8f431d`.
+
+Artifacts from the successful attribution run:
+
+```text
+supervisor output:
+  /home/avj/clones/ax_fuzz/output/light_supervisor_mixed2_20260421_103043
+
+triggering attempt:
+  worker_09/ring/iter_00004667/
+
+attribution core:
+  /var/tmp/cm_cores/core.CodeMeterLin.576861.1776763974
+
+single-packet validation core:
+  /var/tmp/cm_cores/core.CodeMeterLin.580674.1776764065
+```
+
+New scripts:
+
+```text
+fuzzer/samc_light_supervisor.py     high-throughput attribution supervisor
+fuzzer/repro_prefixed_hello.py      deterministic one-packet reproducer
+```
+
+The remainder of this file is retained as the historical reduction process
+that led to the result.
+
 This document describes a practical process for reducing the current
 concurrent SAMC fuzzing crash into a more reproducible triage case.
 
@@ -287,4 +340,3 @@ That is enough for vendor triage and a solid vulnerability report.
    barrier harness.
 6. Reduce worker count and mutation family based on measured crash frequency.
 7. Delta-debug the cleartext mutation only after a repeatable schedule exists.
-
