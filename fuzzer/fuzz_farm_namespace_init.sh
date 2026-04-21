@@ -102,16 +102,34 @@ echo "[$FARM_HOSTNAME] daemon_pid=$DAEMON_PID listening on :$PORT" >&2
 
 # exec so the supervisor becomes PID 1 in the namespace; when it exits,
 # the kernel tears down the whole namespace and CodeMeterLin with it.
+SWEEP_BODY_LEN="${SWEEP_BODY_LEN:-712}"
+SWEEP_BODY_SEED="${SWEEP_BODY_SEED:-0xB0D1E5}"
+SWEEP_OPCODES="${SWEEP_OPCODES:-0x00-0xff}"
+SWEEP_SKIP_OPCODES="${SWEEP_SKIP_OPCODES:-}"
+SWEEP_PREFIX_ZERO_BYTES="${SWEEP_PREFIX_ZERO_BYTES:-0}"
+SWEEP_PATCH_SID="${SWEEP_PATCH_SID:-0}"
+SWEEP_BODY_LENGTHS="${SWEEP_BODY_LENGTHS:-}"
+
+PATCH_SID_FLAG=()
+if [ "$SWEEP_PATCH_SID" = "1" ]; then PATCH_SID_FLAG=(--sweep-patch-sid); fi
+
 exec python3 "$SUPERVISOR" \
-    --ax-fuzz     "$AX_FUZZ" \
-    --out-dir     "$SUPERVISOR_OUT_DIR" \
-    --host        127.0.0.1 \
-    --port        "$PORT" \
-    --workers     "$WORKERS" \
-    --mode        "$MODE" \
-    --iterations  "$ITERATIONS" \
-    --ring-size   "$RING_SIZE" \
-    --seed-base   "$SEED_BASE" \
-    --timeout     "$TIMEOUT" \
+    --ax-fuzz                  "$AX_FUZZ" \
+    --out-dir                  "$SUPERVISOR_OUT_DIR" \
+    --host                     127.0.0.1 \
+    --port                     "$PORT" \
+    --workers                  "$WORKERS" \
+    --mode                     "$MODE" \
+    --iterations               "$ITERATIONS" \
+    --ring-size                "$RING_SIZE" \
+    --seed-base                "$SEED_BASE" \
+    --timeout                  "$TIMEOUT" \
+    --sweep-body-len           "$SWEEP_BODY_LEN" \
+    --sweep-body-seed          "$SWEEP_BODY_SEED" \
+    --sweep-opcodes            "$SWEEP_OPCODES" \
+    --sweep-skip-opcodes       "$SWEEP_SKIP_OPCODES" \
+    --sweep-prefix-zero-bytes  "$SWEEP_PREFIX_ZERO_BYTES" \
+    --sweep-body-lengths       "$SWEEP_BODY_LENGTHS" \
+    "${PATCH_SID_FLAG[@]}" \
     --no-service-check \
-    --core-dir    /var/tmp/cm_cores
+    --core-dir                 /var/tmp/cm_cores

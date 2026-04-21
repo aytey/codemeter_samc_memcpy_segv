@@ -285,13 +285,178 @@ def run_one(samc, host: str, port: int, target_frame: int,
                     _eager_dump_target_frame(worker_dir, iteration, idx, pt, frame)
                 return status, attempt
             if resp["status"] == "wire" and resp.get("inner_len") is None:
-                # Same reasoning: a garbled reply at the target frame is a
-                # weaker but still-distinct crash-trigger candidate.
+                # Garbled reply at the target frame is a weaker signal — in
+                # sweep mode it fires constantly because the daemon rejects
+                # most random opcodes this way. Don't eager-dump these; the
+                # ring-manifest path still captures them if they matter.
                 status = "decrypt_fail" if idx < target_frame else "target_decrypt_fail"
                 attempt["status"] = status
-                if idx == target_frame:
-                    _eager_dump_target_frame(worker_dir, iteration, idx, pt, frame)
                 return status, attempt
+
+        status = "ok"
+        attempt["status"] = status
+        return status, attempt
+    finally:
+        attempt["wall_end"] = time.time()
+        attempt["mono_end_ns"] = time.monotonic_ns()
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+SWEEP_SID_OFFSET = 4   # bytes [4:8] host the session SID in ACK-shaped frames
+SWEEP_SID_LEN = 4
+
+
+def _build_sweep_body(opcode: int, body_len: int, body_seed: int,
+                      prefix_zero_bytes: int, patch_sid: bool,
+                      sid: bytes | None) -> bytes:
+    """Construct one sweep payload with optional zero-prefix and SID patch.
+
+    Layout (when all options are on):
+      [opcode]  [0x00 * prefix_zero_bytes]  [sid[0:SID_LEN]]  [random tail]
+    The random tail fills whatever length remains. `random.Random` is seeded
+    by `(body_seed, opcode)` only — independent of length — so a crash
+    reproduces at any length >= the crash minimum.
+    """
+    if body_len <= 0:
+        return b""
+    rng = random.Random(f"{body_seed:x}:{opcode:02x}:body")
+    # Full random first, then overwrite the structured prefix in-place.
+    out = bytearray(rng.randbytes(body_len))
+    out[0] = opcode & 0xff
+    n_zero = min(prefix_zero_bytes, body_len - 1)
+    for i in range(n_zero):
+        out[1 + i] = 0x00
+    if patch_sid and sid is not None and body_len >= SWEEP_SID_OFFSET + SWEEP_SID_LEN:
+        out[SWEEP_SID_OFFSET:SWEEP_SID_OFFSET + SWEEP_SID_LEN] = sid[:SWEEP_SID_LEN]
+    return bytes(out)
+
+
+def run_sweep_one(samc, host: str, port: int, opcode: int, body_len: int,
+                  body_seed: int, worker_id: int, iteration: int,
+                  worker_dir: Path, prefix_zero_bytes: int = 0,
+                  patch_sid: bool = False) -> tuple[str, dict[str, Any]]:
+    """One opcode-sweep attempt: canonical HELLO, then one crafted frame.
+
+    Body is built by `_build_sweep_body`. The HELLO-returned SID is patched
+    into bytes 4..8 of the crafted frame when `patch_sid` is on — that is the
+    offset where ACK-shaped frames carry the SID (see SID_PATCHES in
+    samc_fuzz.py). Opcodes whose handler expects the SID at a different
+    offset will still be rejected; patching just gets us past the baseline
+    ACK-shaped transport check.
+    """
+    attempt: dict[str, Any] = {
+        "worker_id": worker_id,
+        "iteration": iteration,
+        "target_frame": 1,
+        "opcode": opcode,
+        "body_len": body_len,
+        "sweep": True,
+        "sweep_prefix_zero_bytes": prefix_zero_bytes,
+        "sweep_patch_sid": patch_sid,
+        "wall_start": time.time(),
+        "mono_start_ns": time.monotonic_ns(),
+        "frames": [],
+        "mutation": None,
+        "status": None,
+        "error": None,
+    }
+
+    # random.Random accepts int/str/bytes (not tuples); encode deterministically
+    # so the same (body_seed, opcode, role) triple always produces the same stream.
+    token_rng = random.Random(f"{body_seed:x}:{opcode:02x}:token")
+    token = token_rng.randbytes(samc.HELLO_TOKEN_LEN)
+    attempt["token_hex"] = token.hex()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.connect((host, port))
+    except OSError as exc:
+        status = f"conn_error:{exc}"
+        attempt["status"] = status
+        attempt["error"] = f"{type(exc).__name__}:{exc}"
+        attempt["wall_end"] = time.time()
+        attempt["mono_end_ns"] = time.monotonic_ns()
+        return status, attempt
+
+    try:
+        # Frame 0: canonical HELLO (unmutated, fresh token).
+        hello_frame: dict[str, Any] = {
+            "idx": 0,
+            "mutation": {"strategy": "none"},
+            "sid_values_before": [],
+        }
+        hello_pt = samc.substitute_token(0, samc.CAPTURED_SESSION_C2D[0], token)
+        hello_frame["plaintext"] = hello_pt
+        hello_frame["plaintext_len"] = len(hello_pt)
+        hello_frame["send_start_mono_ns"] = time.monotonic_ns()
+        hello_wire = samc.encrypt_c2d_frame(hello_pt, int(time.time()))
+        try:
+            sock.sendall(hello_wire)
+            hello_frame["send_end_mono_ns"] = time.monotonic_ns()
+        except (OSError, ConnectionResetError, BrokenPipeError) as exc:
+            hello_frame["send_end_mono_ns"] = time.monotonic_ns()
+            hello_frame["send_error"] = f"{type(exc).__name__}:{exc}"
+            attempt["frames"].append(hello_frame)
+            status = "closed_early"
+            attempt["status"] = status
+            return status, attempt
+
+        resp0, inner0 = response_meta(samc, sock)
+        hello_frame["response"] = resp0
+        attempt["frames"].append(hello_frame)
+        if resp0["status"] != "wire" or inner0 is None or len(inner0) < 8:
+            status = "hello_no_session"
+            attempt["status"] = status
+            return status, attempt
+
+        # Build the sweep body now that we have the SID to patch in.
+        sid = bytes(inner0[4:8])
+        body = _build_sweep_body(opcode, body_len, body_seed,
+                                 prefix_zero_bytes, patch_sid, sid)
+
+        # Frame 1: the sweep payload. Plaintext is the crafted bytes verbatim.
+        sweep_frame: dict[str, Any] = {
+            "idx": 1,
+            "mutation": {"strategy": "sweep", "opcode": opcode,
+                         "body_seed": body_seed, "body_len": body_len,
+                         "prefix_zero_bytes": prefix_zero_bytes,
+                         "patch_sid": patch_sid},
+            "sid_values_before": [sid.hex()],
+        }
+        sweep_frame["plaintext"] = body
+        sweep_frame["plaintext_len"] = len(body)
+        sweep_frame["send_start_mono_ns"] = time.monotonic_ns()
+        sweep_wire = samc.encrypt_c2d_frame(body, int(time.time()))
+        try:
+            sock.sendall(sweep_wire)
+            sweep_frame["send_end_mono_ns"] = time.monotonic_ns()
+        except (OSError, ConnectionResetError, BrokenPipeError) as exc:
+            sweep_frame["send_end_mono_ns"] = time.monotonic_ns()
+            sweep_frame["send_error"] = f"{type(exc).__name__}:{exc}"
+            attempt["frames"].append(sweep_frame)
+            status = "closed_early"
+            attempt["status"] = status
+            _eager_dump_target_frame(worker_dir, iteration, 1, body, sweep_frame)
+            return status, attempt
+
+        resp1, _ = response_meta(samc, sock)
+        sweep_frame["response"] = resp1
+        attempt["frames"].append(sweep_frame)
+
+        if resp1["status"] in {"none", "recv_exception"}:
+            status = "target_no_response"
+            attempt["status"] = status
+            _eager_dump_target_frame(worker_dir, iteration, 1, body, sweep_frame)
+            return status, attempt
+        if resp1["status"] == "wire" and resp1.get("inner_len") is None:
+            # Do not eager-dump decrypt_fail in sweep mode — it is the
+            # baseline response for most opcodes with random bodies.
+            status = "target_decrypt_fail"
+            attempt["status"] = status
+            return status, attempt
 
         status = "ok"
         attempt["status"] = status
@@ -358,23 +523,64 @@ def worker_main(config: dict[str, Any], worker_id: int, seed: int, role: int,
     reason = "completed"
     worker_dir = Path(config["out_dir"]) / f"worker_{worker_id:02d}"
 
+    sweep_opcodes: list[int] = []
+    sweep_body_len = 0
+    sweep_body_seed = 0
+    sweep_body_lengths: list[int] = []
+    sweep_prefix_zero_bytes = 0
+    sweep_patch_sid = False
+    is_sweep = config.get("mode") == "sweep"
+    if is_sweep:
+        sweep_opcodes = list(config.get("sweep_opcodes_per_worker", {}).get(worker_id, []))
+        sweep_body_len = int(config.get("sweep_body_len", 712))
+        sweep_body_seed = int(config.get("sweep_body_seed", 0xB0D1E5))
+        sweep_body_lengths = list(config.get("sweep_body_lengths", []))
+        sweep_prefix_zero_bytes = int(config.get("sweep_prefix_zero_bytes", 0))
+        sweep_patch_sid = bool(config.get("sweep_patch_sid", False))
+
     try:
         for i in range(config["iterations"]):
             if stop_event.is_set():
                 reason = "stop_event"
                 break
-            target_frame = role if role >= 0 else i % n_frames
+            if is_sweep:
+                if not sweep_opcodes:
+                    reason = "no_opcodes"
+                    break
+                opcode = sweep_opcodes[i % len(sweep_opcodes)]
+                # When --sweep-body-lengths is given, cycle lengths as an
+                # additional dimension so each iteration picks a new (opcode,
+                # length) combination.
+                if sweep_body_lengths:
+                    this_body_len = sweep_body_lengths[i % len(sweep_body_lengths)]
+                else:
+                    this_body_len = sweep_body_len
+                target_frame = 1
+            else:
+                opcode = None
+                target_frame = role if role >= 0 else i % n_frames
             try:
-                status, attempt = run_one(
-                    samc, config["host"], config["port"], target_frame, rng,
-                    worker_id, i, worker_dir,
-                )
+                if is_sweep:
+                    status, attempt = run_sweep_one(
+                        samc, config["host"], config["port"],
+                        opcode, this_body_len, sweep_body_seed,
+                        worker_id, i, worker_dir,
+                        prefix_zero_bytes=sweep_prefix_zero_bytes,
+                        patch_sid=sweep_patch_sid,
+                    )
+                else:
+                    status, attempt = run_one(
+                        samc, config["host"], config["port"], target_frame, rng,
+                        worker_id, i, worker_dir,
+                    )
             except BaseException:
                 status = "worker_exception"
                 attempt = {
                     "worker_id": worker_id,
                     "iteration": i,
                     "target_frame": target_frame,
+                    "opcode": opcode,
+                    "sweep": is_sweep,
                     "status": status,
                     "error": traceback.format_exc(),
                     "frames": [],
@@ -520,6 +726,29 @@ def ensure_daemon(port: int, check_service: bool = True) -> None:
     raise RuntimeError("codemeter is not ready")
 
 
+def _parse_opcode_spec(spec: str) -> list[int]:
+    """Parse '0x00-0xff' / '0x01,0x20-0x2f,0x5e' into a sorted unique list.
+
+    Accepts decimal or 0x-prefixed hex. Ranges inclusive on both ends.
+    Silently skips empty comma segments so callers can splice lists.
+    """
+    values: set[int] = set()
+    for chunk in spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo_s, hi_s = chunk.split("-", 1)
+            lo = int(lo_s.strip(), 0)
+            hi = int(hi_s.strip(), 0)
+            if lo > hi:
+                lo, hi = hi, lo
+            values.update(range(lo, hi + 1))
+        else:
+            values.add(int(chunk, 0))
+    return sorted(v & 0xff for v in values)
+
+
 def roles_for(workers: int, mode: str) -> list[int]:
     """Map worker IDs to fuzzing roles.
 
@@ -539,6 +768,10 @@ def roles_for(workers: int, mode: str) -> list[int]:
         "hello": [0],
         "ack": [1],
         "big": [2],
+        # Sweep mode doesn't use `role`; the per-worker opcode list is
+        # plumbed through config instead. Stub a value so callers that
+        # still iterate `roles` keep working.
+        "sweep": [-1],
     }
     pattern = patterns[mode]
     return [pattern[i % len(pattern)] for i in range(workers)]
@@ -565,10 +798,38 @@ def supervisor(args: argparse.Namespace) -> int:
         "port": args.port,
         "iterations": args.iterations,
         "ring_size": args.ring_size,
+        "mode": args.mode,
     }
 
-    (out_dir / "run_config.json").write_text(json.dumps({
-        "config": config,
+    sweep_opcodes_per_worker: dict[int, list[int]] = {}
+    if args.mode == "sweep":
+        all_opcodes = _parse_opcode_spec(args.sweep_opcodes)
+        skip = set(_parse_opcode_spec(args.sweep_skip_opcodes)) if args.sweep_skip_opcodes else set()
+        all_opcodes = [op for op in all_opcodes if op not in skip]
+        if not all_opcodes:
+            raise SystemExit(
+                f"--sweep-opcodes/--sweep-skip-opcodes combination is empty: "
+                f"include={args.sweep_opcodes!r} skip={args.sweep_skip_opcodes!r}"
+            )
+        sweep_opcodes_per_worker = {
+            w: all_opcodes[w::args.workers] for w in range(args.workers)
+        }
+        config["sweep_opcodes_per_worker"] = sweep_opcodes_per_worker
+        config["sweep_body_len"] = args.sweep_body_len
+        config["sweep_body_seed"] = args.sweep_body_seed
+        config["sweep_skip_opcodes"] = sorted(skip)
+        config["sweep_prefix_zero_bytes"] = int(args.sweep_prefix_zero_bytes)
+        config["sweep_patch_sid"] = bool(args.sweep_patch_sid)
+        if args.sweep_body_lengths:
+            lens = [int(x, 0) for x in args.sweep_body_lengths.split(",") if x.strip()]
+            if not lens:
+                raise SystemExit(f"--sweep-body-lengths empty: {args.sweep_body_lengths!r}")
+            config["sweep_body_lengths"] = lens
+        else:
+            config["sweep_body_lengths"] = []
+
+    run_config_blob: dict[str, Any] = {
+        "config": {k: v for k, v in config.items() if k != "sweep_opcodes_per_worker"},
         "workers": args.workers,
         "mode": args.mode,
         "roles": roles,
@@ -576,7 +837,20 @@ def supervisor(args: argparse.Namespace) -> int:
         "baseline_pid": baseline_pid,
         "baseline_core": baseline_core,
         "start_wall": start_wall,
-    }, indent=2, sort_keys=True) + "\n")
+    }
+    if args.mode == "sweep":
+        run_config_blob["sweep"] = {
+            "opcode_spec": args.sweep_opcodes,
+            "skip_spec": args.sweep_skip_opcodes,
+            "skip_resolved": sorted(set(_parse_opcode_spec(args.sweep_skip_opcodes)) if args.sweep_skip_opcodes else set()),
+            "body_len": args.sweep_body_len,
+            "body_seed": args.sweep_body_seed,
+            "body_lengths": config.get("sweep_body_lengths", []),
+            "prefix_zero_bytes": int(args.sweep_prefix_zero_bytes),
+            "patch_sid": bool(args.sweep_patch_sid),
+            "opcodes_per_worker": {str(k): v for k, v in sweep_opcodes_per_worker.items()},
+        }
+    (out_dir / "run_config.json").write_text(json.dumps(run_config_blob, indent=2, sort_keys=True) + "\n")
 
     stop_event = mp.Event()
     counters = [mp.Value("Q", 0, lock=False) for _ in range(args.workers)]
@@ -704,7 +978,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=22350)
     ap.add_argument("--workers", type=int, default=16)
-    ap.add_argument("--mode", choices=["mixed", "rotate", "hello", "ack", "big"], default="mixed")
+    ap.add_argument("--mode", choices=["mixed", "rotate", "hello", "ack", "big", "sweep"], default="mixed")
     ap.add_argument("--iterations", type=int, default=10_000_000)
     ap.add_argument("--ring-size", type=int, default=100)
     ap.add_argument("--seed-base", type=lambda s: int(s, 0), default=0xC0D30000)
@@ -722,6 +996,33 @@ def parse_args() -> argparse.Namespace:
                          "Default: /var/tmp/cm_cores and /var/lib/systemd/coredump. "
                          "Inside a namespaced farm, restrict to the farm-private dir "
                          "so cross-farm crashes don't masquerade as self-crashes.")
+    ap.add_argument("--sweep-body-len", type=int, default=712,
+                    help="Length in bytes of the sweep frame (byte 0 = opcode, "
+                         "remainder deterministic random). Only used when --mode=sweep.")
+    ap.add_argument("--sweep-body-seed", type=lambda s: int(s, 0), default=0xB0D1E5,
+                    help="Base seed for the sweep body PRNG. Same seed + same opcode "
+                         "always produces the same body so crashes are reproducible. "
+                         "Only used when --mode=sweep.")
+    ap.add_argument("--sweep-opcodes", type=str, default="0x00-0xff",
+                    help="Opcode range or list to sweep, e.g. '0x00-0xff' or "
+                         "'0x01,0x20-0x2f,0x5e'. Workers split the union by stride.")
+    ap.add_argument("--sweep-skip-opcodes", type=str, default="",
+                    help="Opcode list/range to exclude from the sweep, same syntax as "
+                         "--sweep-opcodes. Use to skip opcodes that trigger a known "
+                         "bug and shadow the rest of the opcode space.")
+    ap.add_argument("--sweep-prefix-zero-bytes", type=int, default=0,
+                    help="After the opcode byte, write N zero bytes before the random "
+                         "tail. Mirrors the '00 00 00' shape of the captured C2D frames "
+                         "and is more likely to clear transport-layer checks.")
+    ap.add_argument("--sweep-patch-sid", action="store_true",
+                    help="Patch the HELLO-returned SID into bytes [4:8] of the crafted "
+                         "frame. Gets handlers that gate on session-is-valid past that "
+                         "check. Requires body_len >= 8.")
+    ap.add_argument("--sweep-body-lengths", type=str, default="",
+                    help="Comma-separated list of lengths to cycle through per iteration "
+                         "(e.g. '4,8,12,16,40,100,712'). Overrides --sweep-body-len. "
+                         "Each (opcode, length) pair is tested; a worker at iteration i "
+                         "picks lengths[i % N].")
     return ap.parse_args()
 
 

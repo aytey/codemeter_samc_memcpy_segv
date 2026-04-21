@@ -18,6 +18,9 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 | `fuzz_farm_launcher.py` | host-side driver for multi-farm namespaced fuzzing with crash-signature bucketing and auto-restart |
 | `fuzz_farm_namespace_init.sh` | PID-1 init script each farm's namespace runs; mounts, starts daemon, execs supervisor |
 | `remote_cm_fuzz_launcher.py` | remote daemon-to-server protocol fuzzer with SSH-based target crash monitoring |
+| `samc_veth_farm_launcher.py` | local multi-daemon farm where fuzz traffic reaches each daemon over a veth address, not loopback |
+| `samc_veth_target_init.sh` | target-only namespace init used by `samc_veth_farm_launcher.py` |
+| `samc_ecdh_prefix_supervisor.py` | ECDH-channel prefix/dispatcher fuzzer for HELLO and ACK parser-shift bugs |
 
 For the multi-daemon scale-out design and what the first 1-hour 8×10 run
 revealed, see [`../MULTI_INSTANCE_FUZZING.md`](../MULTI_INSTANCE_FUZZING.md).
@@ -120,6 +123,62 @@ valid auth/init exchange, fuzzes encrypted `0x0031` query records by default,
 and watches the remote `CodeMeterLin` PID/core state over SSH. Use
 `--mode auth0021` for pre-auth 32-byte record fuzzing or `--mode mixed` to
 blend both.
+
+Local remote-looking SAMC farm:
+
+```bash
+sudo python3 samc_veth_farm_launcher.py \
+  --farms 4 \
+  --workers-per-farm 4 \
+  --modes sweep,ack,hello,big \
+  --wall-clock 900 \
+  --timeout 900
+```
+
+This starts one `CodeMeterLin` per network namespace, with a veth pair per
+farm. The fuzz workers run on the host and connect to each target namespace IP
+such as `10.210.0.2:22350`, so the daemon sees the SAMC peer as the host-side
+veth address instead of `127.0.0.1`. By default the launcher also installs an
+nftables masquerade rule for namespace outbound traffic; use `--no-nat` if only
+host-to-namespace fuzzing is needed.
+
+To check the veth farm against the known remote/ECDH HELLO trigger:
+
+```bash
+sudo python3 samc_veth_farm_launcher.py \
+  --farms 1 \
+  --workers-per-farm 1 \
+  --modes prefixed_hello \
+  --wall-clock 60 \
+  --timeout 60
+```
+
+`prefixed_hello` is a deterministic canary mode. It sends
+`repro_prefixed_hello_standalone.py` over the ECDH `0xa1` channel to the
+namespace target and records whether the farm-private crash oracle saw the
+target die, lose its listener, or write a core.
+
+Purpose-built search for the same bug class:
+
+```bash
+sudo python3 samc_veth_farm_launcher.py \
+  --farms 4 \
+  --workers-per-farm 4 \
+  --modes ecdh_prefix_hello,ecdh_prefix_ack \
+  --ecdh-prefix-opcodes 0x00-0xff \
+  --ecdh-prefix-lengths 1-32 \
+  --wall-clock 900 \
+  --timeout 900
+```
+
+The `ecdh_prefix_*` modes keep the ECDH selector channel, length, CRC, HELLO
+token, and ACK session-id patching valid, then fuzz only the parser-visible
+prefix before canonical messages. This is designed to find dispatcher/field
+shift failures like the `5e355ed6f2 || HELLO` crash without relying on a random
+insert to rediscover the exact five bytes. Use
+`--ecdh-prefix-include-known-every N` to inject the known prefix periodically as
+a regression canary during longer campaigns; leave it at `0` to avoid the known
+crash shadowing new signatures.
 
 ## What it does per iteration
 

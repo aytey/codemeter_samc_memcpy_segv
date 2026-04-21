@@ -161,6 +161,13 @@ def spawn_farm(
     timeout: int,
     port: int,
     codemeter_bin: Path,
+    sweep_body_len: int = 712,
+    sweep_body_seed: int = 0xB0D1E5,
+    sweep_opcodes: str = "0x00-0xff",
+    sweep_skip_opcodes: str = "",
+    sweep_prefix_zero_bytes: int = 0,
+    sweep_patch_sid: bool = False,
+    sweep_body_lengths: str = "",
 ) -> dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     ready_file = out_dir / "ready"
@@ -187,6 +194,13 @@ def spawn_farm(
         "PORT": str(port),
         "READY_FILE": str(ready_file),
         "DAEMON_LOG": str(daemon_log),
+        "SWEEP_BODY_LEN": str(sweep_body_len),
+        "SWEEP_BODY_SEED": f"0x{sweep_body_seed:X}",
+        "SWEEP_OPCODES": sweep_opcodes,
+        "SWEEP_SKIP_OPCODES": sweep_skip_opcodes,
+        "SWEEP_PREFIX_ZERO_BYTES": str(sweep_prefix_zero_bytes),
+        "SWEEP_PATCH_SID": "1" if sweep_patch_sid else "0",
+        "SWEEP_BODY_LENGTHS": sweep_body_lengths,
     })
 
     log_fh = ns_log.open("wb")
@@ -273,6 +287,13 @@ def _spawn_one_run(farm_state: dict[str, Any], args: argparse.Namespace,
         timeout=args.timeout,
         port=args.port,
         codemeter_bin=args.codemeter_bin,
+        sweep_body_len=args.sweep_body_len,
+        sweep_body_seed=args.sweep_body_seed,
+        sweep_opcodes=args.sweep_opcodes,
+        sweep_skip_opcodes=args.sweep_skip_opcodes,
+        sweep_prefix_zero_bytes=args.sweep_prefix_zero_bytes,
+        sweep_patch_sid=args.sweep_patch_sid,
+        sweep_body_lengths=args.sweep_body_lengths,
     )
     # Merge per-run process handles into the persistent state dict.
     for k in ("proc", "log_fh", "ready_file", "ns_log", "daemon_log", "out_dir"):
@@ -320,6 +341,34 @@ def _process_exit(farm_state: dict[str, Any], rc: int,
             entry["signature"] = sig
             entry["classification"] = cls
             entry["core_path_host"] = str(host_core)
+            entry["core_size"] = host_core.stat().st_size
+            # Core-disk policy: at most one exemplar per (farm, signature),
+            # regardless of known/unknown. Signature + input-identity are
+            # enough to reproduce; an exemplar buys us a gdb-able backtrace
+            # for the first time each farm saw the signature.
+            #
+            # --keep-known-cores overrides: keep every known-signature core.
+            # New signatures: always get the first-per-farm exemplar, rest
+            # deleted. This is critical for unattended overnight runs where
+            # a new bug that fires 100×/hr would otherwise fill the disk.
+            is_known = cls in KNOWN_SIGNATURES.values()
+            first_seen = farm_state.setdefault("first_core_per_sig", {})
+            should_keep = False
+            if args.keep_known_cores and is_known:
+                should_keep = True
+                entry["core_kept_reason"] = "keep_known_cores"
+            elif cls not in first_seen:
+                should_keep = True
+                first_seen[cls] = str(host_core)
+                entry["core_kept_reason"] = (
+                    "first_exemplar_new" if not is_known else "first_exemplar_known"
+                )
+            if not should_keep:
+                try:
+                    host_core.unlink()
+                    entry["core_deleted"] = True
+                except OSError as exc:
+                    entry["core_delete_error"] = f"{type(exc).__name__}:{exc}"
         else:
             entry["classification"] = "core_missing"
             entry["core_path_host"] = str(host_core)
@@ -366,6 +415,25 @@ def main() -> int:
     ap.add_argument("--init-script", type=Path, default=DEFAULT_INIT_SCRIPT)
     ap.add_argument("--ready-timeout", type=float, default=60.0,
                     help="how long to wait for each farm's listener to come up")
+    ap.add_argument("--keep-known-cores", action="store_true",
+                    help="preserve ALL cores matching a known signature. Default: "
+                         "one exemplar per (farm, known signature), rest deleted. "
+                         "New signatures always get one exemplar per farm regardless.")
+    ap.add_argument("--sweep-body-len", type=int, default=712,
+                    help="body length for --mode sweep (forwarded to supervisor)")
+    ap.add_argument("--sweep-body-seed", type=lambda s: int(s, 0), default=0xB0D1E5,
+                    help="body PRNG seed for --mode sweep (forwarded to supervisor)")
+    ap.add_argument("--sweep-opcodes", type=str, default="0x00-0xff",
+                    help="opcode spec for --mode sweep (forwarded to supervisor)")
+    ap.add_argument("--sweep-skip-opcodes", type=str, default="",
+                    help="opcode spec to exclude from --mode sweep (forwarded to supervisor)")
+    ap.add_argument("--sweep-prefix-zero-bytes", type=int, default=0,
+                    help="N zero bytes after the opcode in the crafted frame (forwarded)")
+    ap.add_argument("--sweep-patch-sid", action="store_true",
+                    help="patch HELLO-returned SID into bytes [4:8] of the crafted frame "
+                         "(forwarded to supervisor)")
+    ap.add_argument("--sweep-body-lengths", type=str, default="",
+                    help="comma-separated body lengths to cycle per iteration (forwarded)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
