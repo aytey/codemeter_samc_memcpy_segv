@@ -46,6 +46,17 @@ python3 repro_prefixed_hello.py
 This intentionally crashes the daemon by sending a single valid encrypted
 SAMC HELLO whose cleartext is prefixed with `5e355ed6f2`.
 
+For a non-loopback network-server target, the same reproducer now uses the
+ECDH-selected channel by default:
+
+```bash
+python3 repro_prefixed_hello.py --host vistrrdslin0004.vi.vector.int
+```
+
+This still uses the outer `samc` envelope, but sends `0xa2 0x05` ECDH init
+first and then sends the prefixed HELLO as an encrypted `0xa1` payload. The
+local PID/core crash oracle is skipped for non-loopback targets.
+
 Standalone version with no project-local imports:
 
 ```bash
