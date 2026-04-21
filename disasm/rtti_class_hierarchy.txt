@@ -1,0 +1,77 @@
+============================================================
+RTTI walk of the crashing parser-state class
+Extracted from core.CodeMeterLin.477656.1776755891
+(at runtime — the on-disk binary has obfuscated bytes at
+the vtable addresses; AxProtector constructs them at load time.)
+============================================================
+
+AxProtector has anonymised the mangled class-name strings but
+preserved the full Itanium-C++-ABI RTTI structure. The names below
+are stable hashes of the real class names; Wibu's build system will
+have the reverse mapping.
+
+Class layout at crash-time  (base VMA CodeMeterLin = 0x562a86800000):
+
+  [Derived]  (the class `*r15` is being built into)
+
+      vtable                 CodeMeterLin + 0x88a4c0
+      vtable-8 (type_info)   CodeMeterLin + 0x88a528
+      type_info.name         CodeMeterLin + 0x05ec50
+        → "rtti_type_0x88d34f964f5115ef"
+      type_info.parent       CodeMeterLin + 0x88d298  (= base-1 type_info)
+
+  [Base-1]  (the base class whose vtable is installed mid-destructor)
+
+      vtable                 CodeMeterLin + 0x88d230
+      vtable-8 (type_info)   CodeMeterLin + 0x88d298
+      type_info.name         CodeMeterLin + 0x06a340
+        → "rtti_type_0xfacc5b510c5ddc77"
+      type_info.parent       CodeMeterLin + 0x689ab8  (= base-2 type_info)
+
+  [Base-2]  (grandparent — single-inheritance chain)
+
+      type_info at           CodeMeterLin + 0x689ab8
+      type_info.name         CodeMeterLin + 0x05d1f0
+        → "rtti_type_0xe38d02e3920fda2c"
+      type_info.parent       CodeMeterLin + 0x6b5b08
+        (likely std::exception or a similar language-level base, not
+         followed further)
+
+Inheritance chain (derived → ... → root):
+
+   rtti_type_0x88d34f964f5115ef          (the parser-state class)
+     └─ rtti_type_0xfacc5b510c5ddc77     (base-1 — whose vtable is
+                                          installed by the destructor
+                                          before destroying the base-
+                                          class std::vector members)
+        └─ rtti_type_0xe38d02e3920fda2c  (base-2)
+           └─ (root, not followed)
+
+Class instance layout at `*r15` (crash time):
+
+    +0x00   vtable pointer               ( CodeMeterLin + 0x88a4c0 )
+    +0x08   i32 sentinel -1 (lo32)
+    +0x10   zero
+    +0x18   i32 sentinel -1 (hi32)
+    +0x20   zero
+    +0x28   scalar 0x5e00 = 24 064
+    +0x30   std::vector #1  (base-class member, empty at crash)
+    +0x48   std::vector #2  (base-class member, empty at crash)
+    +0x60   u64 0x7f33b89f927c4608       (high-entropy — hash/nonce?)
+    +0x68   u64 0x0000000b612b09cb       ★ the bad length that reached memcpy
+    +0x70..+0x80   zeros
+    +0x88   std::vector #3  (derived-class member, empty)
+    +0xa0   std::vector #4  (derived-class member, empty)
+    +0xb8   end
+
+Inferred destructor call chain
+(from disasm/vtable_slot0_destructor_at_0x8f3c40.txt):
+
+   ~Derived:
+     set this->vtable = Derived_vtable      (defensive)
+     destroy vector #4 at this+0xa0         (derived)
+     destroy vector #3 at this+0x88         (derived)
+     set this->vtable = Base1_vtable        (downcast)
+     destroy vector #2 at this+0x48         (base-1)
+     destroy vector #1 at this+0x30         (base-1)
+     tail-call operator delete
