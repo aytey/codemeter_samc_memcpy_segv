@@ -1,0 +1,41 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000008f5440 <.text+0x5470e0>:
+  8f5440:	41 f7 c5 00 02 00 00 	test   $0x200,%r13d
+  8f5447:	75 aa                	jne    8f53f3 <fwrite@plt+0x54709b>
+  8f5449:	e9 64 01 00 00       	jmp    8f55b2 <fwrite@plt+0x54725a>
+  8f544e:	89 4c 24 14          	mov    %ecx,0x14(%rsp)
+  8f5452:	8b 43 04             	mov    0x4(%rbx),%eax
+  8f5455:	41 89 47 60          	mov    %eax,0x60(%r15)
+  8f5459:	8b 43 08             	mov    0x8(%rbx),%eax
+  8f545c:	41 89 47 64          	mov    %eax,0x64(%r15)
+  8f5460:	8b 53 0c             	mov    0xc(%rbx),%edx
+  8f5463:	41 89 57 68          	mov    %edx,0x68(%r15)
+  8f5467:	8b 43 10             	mov    0x10(%rbx),%eax
+  8f546a:	4d 8d 67 6c          	lea    0x6c(%r15),%r12
+  8f546e:	41 89 47 6c          	mov    %eax,0x6c(%r15)
+  8f5472:	49 8d 8f 88 00 00 00 	lea    0x88(%r15),%rcx
+  8f5479:	48 8d 73 14          	lea    0x14(%rbx),%rsi
+  8f547d:	49 b8 ff ff ff ff ff 	movabs $0x7fffffffffffffff,%r8
+  8f5484:	ff ff 7f 
+  8f5487:	bf 34 ff f3 2f       	mov    $0x2ff3ff34,%edi
+  8f548c:	e8 cf e8 ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f5491:	49 89 47 70          	mov    %rax,0x70(%r15)
+  8f5495:	49 8d 9f a0 00 00 00 	lea    0xa0(%r15),%rbx
+  8f549c:	45 8b 77 6c          	mov    0x6c(%r15),%r14d
+  8f54a0:	e8 1b e5 ff ff       	call   8f39c0 <fwrite@plt+0x545668>
+  8f54a5:	89 c2                	mov    %eax,%edx
+  8f54a7:	48 89 df             	mov    %rbx,%rdi
+  8f54aa:	4c 89 f6             	mov    %r14,%rsi
+  8f54ad:	e8 fe e4 ff ff       	call   8f39b0 <fwrite@plt+0x545658>
+  8f54b2:	49 89 47 7c          	mov    %rax,0x7c(%r15)
+  8f54b6:	31 db                	xor    %ebx,%ebx
+  8f54b8:	44 89 e8             	mov    %r13d,%eax
+  8f54bb:	41                   	rex.B
+  8f54bc:	bd                   	.byte 0xbd
+  8f54bd:	00 00                	add    %al,(%rax)
+	...

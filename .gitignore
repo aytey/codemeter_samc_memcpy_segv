@@ -6,3 +6,4 @@ __pycache__/
 core.CodeMeterLin.*
 *.core
 .codex
+_archive_cores/

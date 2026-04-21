@@ -1,0 +1,52 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000803860 <.text+0x455500>:
+  803860:	00 24 01             	add    %ah,(%rcx,%rax,1)
+  803863:	59                   	pop    %rcx
+  803864:	c3                   	ret
+  803865:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
+  80386c:	00 00 00 
+  80386f:	90                   	nop
+  803870:	48 83 ec 18          	sub    $0x18,%rsp
+  803874:	49 89 d0             	mov    %rdx,%r8
+  803877:	ba 18 da 19 81       	mov    $0x8119da18,%edx
+  80387c:	49 89 f1             	mov    %rsi,%r9
+  80387f:	e8 bc 10 00 00       	call   804940 <fwrite@plt+0x4565e8>
+  803884:	48 83 c4 18          	add    $0x18,%rsp
+  803888:	c3                   	ret
+  803889:	0f 1f 80 00 00 00 00 	nopl   0x0(%rax)
+  803890:	50                   	push   %rax
+  803891:	41 b9 35 41 f2 3b    	mov    $0x3bf24135,%r9d
+  803897:	e8 04 48 00 00       	call   8080a0 <fwrite@plt+0x459d48>
+  80389c:	24 01                	and    $0x1,%al
+  80389e:	59                   	pop    %rcx
+  80389f:	c3                   	ret
+  8038a0:	55                   	push   %rbp
+  8038a1:	41 56                	push   %r14
+  8038a3:	53                   	push   %rbx
+  8038a4:	48 89 fb             	mov    %rdi,%rbx
+  8038a7:	8b 2d 2f 3b 72 01    	mov    0x1723b2f(%rip),%ebp        # 1f273dc <_fini@@Base+0x6ed5a0>
+  8038ad:	48 8d 05 14 30 68 01 	lea    0x1683014(%rip),%rax        # 1e868c8 <_fini@@Base+0x64ca8c>
+  8038b4:	48 89 07             	mov    %rax,(%rdi)
+  8038b7:	48 8d 05 b2 30 68 01 	lea    0x16830b2(%rip),%rax        # 1e86970 <_fini@@Base+0x64cb34>
+  8038be:	48 89 47 08          	mov    %rax,0x8(%rdi)
+  8038c2:	48 8b bf e0 02 00 00 	mov    0x2e0(%rdi),%rdi
+  8038c9:	48 8d 83 f0 02 00 00 	lea    0x2f0(%rbx),%rax
+  8038d0:	48 39 c7             	cmp    %rax,%rdi
+  8038d3:	74 13                	je     8038e8 <fwrite@plt+0x455590>
+  8038d5:	48 8b 30             	mov    (%rax),%rsi
+  8038d8:	48 ff c6             	inc    %rsi
+  8038db:	89 ea                	mov    %ebp,%edx
+  8038dd:	81 f2 d1 87 03 5a    	xor    $0x5a0387d1,%edx
+  8038e3:	e8 88 fd ff ff       	call   803670 <fwrite@plt+0x455318>
+  8038e8:	48 8b bb c0 02 00 00 	mov    0x2c0(%rbx),%rdi
+  8038ef:	48 8d 83 d0 02 00 00 	lea    0x2d0(%rbx),%rax
+  8038f6:	48 39 c7             	cmp    %rax,%rdi
+  8038f9:	74 13                	je     80390e <fwrite@plt+0x4555b6>
+  8038fb:	48 8b 30             	mov    (%rax),%rsi
+  8038fe:	48                   	rex.W
+  8038ff:	ff                   	.byte 0xff

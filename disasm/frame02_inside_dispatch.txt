@@ -1,0 +1,61 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000008f4100 <.text+0x545da0>:
+  8f4100:	83 f8 02             	cmp    $0x2,%eax
+  8f4103:	0f 84 d3 07 00 00    	je     8f48dc <fwrite@plt+0x546584>
+  8f4109:	83 f8 01             	cmp    $0x1,%eax
+  8f410c:	0f 85 84 0a 00 00    	jne    8f4b96 <fwrite@plt+0x54683e>
+  8f4112:	bf a3 95 9f 9e       	mov    $0x9e9f95a3,%edi
+  8f4117:	49 89 e8             	mov    %rbp,%r8
+  8f411a:	e8 41 fc ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f411f:	e9 11 0c 00 00       	jmp    8f4d35 <fwrite@plt+0x5469dd>
+  8f4124:	4c 89 ef             	mov    %r13,%rdi
+  8f4127:	e8 e4 f9 ff ff       	call   8f3b10 <fwrite@plt+0x5457b8>
+  8f412c:	48 85 c0             	test   %rax,%rax
+  8f412f:	0f 84 c6 08 00 00    	je     8f49fb <fwrite@plt+0x5466a3>
+  8f4135:	48 89 c7             	mov    %rax,%rdi
+  8f4138:	48 89 c3             	mov    %rax,%rbx
+  8f413b:	e8 e0 f9 ff ff       	call   8f3b20 <fwrite@plt+0x5457c8>
+  8f4140:	89 c1                	mov    %eax,%ecx
+  8f4142:	48 89 d8             	mov    %rbx,%rax
+  8f4145:	f7 c1 00 00 40 00    	test   $0x400000,%ecx
+  8f414b:	0f 85 e6 0b 00 00    	jne    8f4d37 <fwrite@plt+0x5469df>
+  8f4151:	e9 c1 07 00 00       	jmp    8f4917 <fwrite@plt+0x5465bf>
+  8f4156:	44 89 ee             	mov    %r13d,%esi
+  8f4159:	bf 12 19 59 c8       	mov    $0xc8591912,%edi
+  8f415e:	4d 89 e0             	mov    %r12,%r8
+  8f4161:	e8 fa fb ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f4166:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
+  8f416d:	00 00 
+  8f416f:	48 3b 8c 24 10 01 00 	cmp    0x110(%rsp),%rcx
+  8f4176:	00 
+  8f4177:	0f 84 d1 0b 00 00    	je     8f4d4e <fwrite@plt+0x5469f6>
+  8f417d:	e9 95 0c 00 00       	jmp    8f4e17 <fwrite@plt+0x546abf>
+  8f4182:	4c 39 ed             	cmp    %r13,%rbp
+  8f4185:	0f 87 02 09 00 00    	ja     8f4a8d <fwrite@plt+0x546735>
+  8f418b:	48 85 ed             	test   %rbp,%rbp
+  8f418e:	0f 94 c0             	sete   %al
+  8f4191:	48 85 f6             	test   %rsi,%rsi
+  8f4194:	0f 94 c1             	sete   %cl
+  8f4197:	08 c1                	or     %al,%cl
+  8f4199:	0f 85 9d 01 00 00    	jne    8f433c <fwrite@plt+0x545fe4>
+  8f419f:	48 01 f5             	add    %rsi,%rbp
+  8f41a2:	bf d5 4d 7b 0d       	mov    $0xd7b4dd5,%edi
+  8f41a7:	48 89 ea             	mov    %rbp,%rdx
+  8f41aa:	48 89 f1             	mov    %rsi,%rcx
+  8f41ad:	4d 89 e0             	mov    %r12,%r8
+  8f41b0:	e8 ab fb ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f41b5:	e9 42 0c 00 00       	jmp    8f4dfc <fwrite@plt+0x546aa4>
+  8f41ba:	ba cb 9b 63 ca       	mov    $0xca639bcb,%edx
+  8f41bf:	31 c9                	xor    %ecx,%ecx
+  8f41c1:	e8 9a 0c 00 00       	call   8f4e60 <fwrite@plt+0x546b08>
+  8f41c6:	48 89 eb             	mov    %rbp,%rbx
+  8f41c9:	4c 29 e3             	sub    %r12,%rbx
+  8f41cc:	80                   	.byte 0x80
+  8f41cd:	3d                   	.byte 0x3d
+  8f41ce:	55                   	push   %rbp
+  8f41cf:	7a                   	.byte 0x7a

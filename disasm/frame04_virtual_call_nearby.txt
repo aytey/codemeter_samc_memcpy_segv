@@ -1,0 +1,65 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000008f3b90 <.text+0x545830>:
+  8f3b90:	31 d2                	xor    %edx,%edx
+  8f3b92:	e9 c9 b1 f2 00       	jmp    181ed60 <fwrite@plt+0x1470a08>
+  8f3b97:	66 0f 1f 84 00 00 00 	nopw   0x0(%rax,%rax,1)
+  8f3b9e:	00 00 
+  8f3ba0:	50                   	push   %rax
+  8f3ba1:	e8 6a 93 ab ff       	call   3acf10 <_Exit@plt>
+  8f3ba6:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
+  8f3bad:	00 00 00 
+  8f3bb0:	41 57                	push   %r15
+  8f3bb2:	41 56                	push   %r14
+  8f3bb4:	53                   	push   %rbx
+  8f3bb5:	48 89 d3             	mov    %rdx,%rbx
+  8f3bb8:	49 89 f6             	mov    %rsi,%r14
+  8f3bbb:	49 89 ff             	mov    %rdi,%r15
+  8f3bbe:	e8 3d 30 b1 ff       	call   406c00 <fwrite@plt+0x588a8>
+  8f3bc3:	48 8b 78 18          	mov    0x18(%rax),%rdi
+  8f3bc7:	48 8d 35 f2 b9 64 01 	lea    0x164b9f2(%rip),%rsi        # 1f3f5c0 <_fini@@Base+0x705784>
+  8f3bce:	31 d2                	xor    %edx,%edx
+  8f3bd0:	4c 89 f9             	mov    %r15,%rcx
+  8f3bd3:	4d 89 f0             	mov    %r14,%r8
+  8f3bd6:	49 89 d9             	mov    %rbx,%r9
+  8f3bd9:	ff 50 40             	call   *0x40(%rax)
+  8f3bdc:	84 c0                	test   %al,%al
+  8f3bde:	74 06                	je     8f3be6 <fwrite@plt+0x54588e>
+  8f3be0:	5b                   	pop    %rbx
+  8f3be1:	41 5e                	pop    %r14
+  8f3be3:	41 5f                	pop    %r15
+  8f3be5:	c3                   	ret
+  8f3be6:	bf fb ff ff ff       	mov    $0xfffffffb,%edi
+  8f3beb:	e8 b0 ff ff ff       	call   8f3ba0 <fwrite@plt+0x545848>
+  8f3bf0:	50                   	push   %rax
+  8f3bf1:	48 89 fa             	mov    %rdi,%rdx
+  8f3bf4:	bf 69 28 fe 50       	mov    $0x50fe2869,%edi
+  8f3bf9:	e8 62 01 00 00       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f3bfe:	58                   	pop    %rax
+  8f3bff:	c3                   	ret
+  8f3c00:	50                   	push   %rax
+  8f3c01:	48 89 f1             	mov    %rsi,%rcx
+  8f3c04:	48 89 d6             	mov    %rdx,%rsi
+  8f3c07:	ba a5 e3 70 78       	mov    $0x7870e3a5,%edx
+  8f3c0c:	49 89 f8             	mov    %rdi,%r8
+  8f3c0f:	e8 4c 12 00 00       	call   8f4e60 <fwrite@plt+0x546b08>
+  8f3c14:	24 01                	and    $0x1,%al
+  8f3c16:	59                   	pop    %rcx
+  8f3c17:	c3                   	ret
+  8f3c18:	0f 1f 84 00 00 00 00 	nopl   0x0(%rax,%rax,1)
+  8f3c1f:	00 
+  8f3c20:	50                   	push   %rax
+  8f3c21:	48 89 f8             	mov    %rdi,%rax
+  8f3c24:	89 d1                	mov    %edx,%ecx
+  8f3c26:	48 89 f7             	mov    %rsi,%rdi
+  8f3c29:	48 89 c6             	mov    %rax,%rsi
+  8f3c2c:	ba ce f7 f1 f6       	mov    $0xf6f1f7ce,%edx
+  8f3c31:	e8 2a 12 00 00       	call   8f4e60 <fwrite@plt+0x546b08>
+  8f3c36:	24 01                	and    $0x1,%al
+  8f3c38:	59                   	pop    %rcx
+  8f3c39:	c3                   	ret
+  8f3c3a:	66 0f 1f 44 00 00    	nopw   0x0(%rax,%rax,1)

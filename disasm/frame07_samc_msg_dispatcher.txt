@@ -1,0 +1,40 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000805a80 <.text+0x457720>:
+  805a80:	44 89 44 24 78       	mov    %r8d,0x78(%rsp)
+  805a85:	89 7c 24 24          	mov    %edi,0x24(%rsp)
+  805a89:	48 89 9c 24 88 00 00 	mov    %rbx,0x88(%rsp)
+  805a90:	00 
+  805a91:	48 89 4c 24 30       	mov    %rcx,0x30(%rsp)
+  805a96:	48 89 44 24 50       	mov    %rax,0x50(%rsp)
+  805a9b:	48 8b 3d e6 60 8c 01 	mov    0x18c60e6(%rip),%rdi        # 20cbb88 <_fini@@Base+0x891d4c>
+  805aa2:	48 8b 07             	mov    (%rdi),%rax
+  805aa5:	48 89 74 24 48       	mov    %rsi,0x48(%rsp)
+  805aaa:	48 89 94 24 b0 00 00 	mov    %rdx,0xb0(%rsp)
+  805ab1:	00 
+  805ab2:	ff 50 10             	call   *0x10(%rax)
+  805ab5:	48 89 c6             	mov    %rax,%rsi
+  805ab8:	45 31 f6             	xor    %r14d,%r14d
+  805abb:	48 85 c0             	test   %rax,%rax
+  805abe:	0f 84 e6 00 00 00    	je     805baa <fwrite@plt+0x457852>
+  805ac4:	4c 8d b4 24 50 01 00 	lea    0x150(%rsp),%r14
+  805acb:	00 
+  805acc:	4c 89 e3             	mov    %r12,%rbx
+  805acf:	f7 44 24 20 00 02 00 	testl  $0x200,0x20(%rsp)
+  805ad6:	00 
+  805ad7:	0f 85 9b 25 00 00    	jne    808078 <fwrite@plt+0x459d20>
+  805add:	48 8d b4 24 d0 01 00 	lea    0x1d0(%rsp),%rsi
+  805ae4:	00 
+  805ae5:	4c 89 e7             	mov    %r12,%rdi
+  805ae8:	31 d2                	xor    %edx,%edx
+  805aea:	e8 71 db ff ff       	call   803660 <fwrite@plt+0x455308>
+  805aef:	49 89 04 24          	mov    %rax,(%r12)
+  805af3:	48 8b 84 24 d0 01 00 	mov    0x1d0(%rsp),%rax
+  805afa:	00 
+  805afb:	49 89 06             	mov    %rax,(%r14)
+  805afe:	48                   	rex.W
+  805aff:	85                   	.byte 0x85

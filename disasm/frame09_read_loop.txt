@@ -1,0 +1,40 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000007fd8e0 <.text+0x44f580>:
+  7fd8e0:	89 4d 05             	mov    %ecx,0x5(%rbp)
+  7fd8e3:	00 00                	add    %al,(%rax)
+  7fd8e5:	e9 b0 01 00 00       	jmp    7fda9a <fwrite@plt+0x44f742>
+  7fd8ea:	41 88 00             	mov    %al,(%r8)
+  7fd8ed:	48 89 ef             	mov    %rbp,%rdi
+  7fd8f0:	48 8b b4 24 98 00 00 	mov    0x98(%rsp),%rsi
+  7fd8f7:	00 
+  7fd8f8:	48 8b 94 24 a0 00 00 	mov    0xa0(%rsp),%rdx
+  7fd8ff:	00 
+  7fd900:	e8 db b2 ff ff       	call   7f8be0 <fwrite@plt+0x44a888>
+  7fd905:	41 89 45 00          	mov    %eax,0x0(%r13)
+  7fd909:	48 89 ef             	mov    %rbp,%rdi
+  7fd90c:	48 8b b4 24 98 00 00 	mov    0x98(%rsp),%rsi
+  7fd913:	00 
+  7fd914:	48 8b 94 24 a0 00 00 	mov    0xa0(%rsp),%rdx
+  7fd91b:	00 
+  7fd91c:	e8 cf b2 ff ff       	call   7f8bf0 <fwrite@plt+0x44a898>
+  7fd921:	48 8b 8c 24 b0 00 00 	mov    0xb0(%rsp),%rcx
+  7fd928:	00 
+  7fd929:	48 8b 39             	mov    (%rcx),%rdi
+  7fd92c:	48 89 01             	mov    %rax,(%rcx)
+  7fd92f:	48 85 ff             	test   %rdi,%rdi
+  7fd932:	74 0a                	je     7fd93e <fwrite@plt+0x44f5e6>
+  7fd934:	4c 89 7c 24 40       	mov    %r15,0x40(%rsp)
+  7fd939:	e9 dd f2 ff ff       	jmp    7fcc1b <fwrite@plt+0x44e8c3>
+  7fd93e:	8b 44 24 28          	mov    0x28(%rsp),%eax
+  7fd942:	a9 00 00 08 00       	test   $0x80000,%eax
+  7fd947:	75 6c                	jne    7fd9b5 <fwrite@plt+0x44f65d>
+  7fd949:	48 89 6c 24 50       	mov    %rbp,0x50(%rsp)
+  7fd94e:	48 c7 84 24 80 00 00 	movq   $0x0,0x80(%rsp)
+  7fd955:	00 00 00 00 00 
+  7fd95a:	4c 89 7c 24 40       	mov    %r15,0x40(%rsp)
+  7fd95f:	48                   	rex.W

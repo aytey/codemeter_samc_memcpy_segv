@@ -1,0 +1,35 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000862700 <.text+0x4b43a0>:
+  862700:	48 83 ec 28          	sub    $0x28,%rsp
+  862704:	48 89 7c 24 08       	mov    %rdi,0x8(%rsp)
+  862709:	c7 44 24 18 5d 7a 68 	movl   $0x86687a5d,0x18(%rsp)
+  862710:	86 
+  862711:	48 89 d7             	mov    %rdx,%rdi
+  862714:	49 89 f1             	mov    %rsi,%r9
+  862717:	e8 74 21 01 00       	call   874890 <fwrite@plt+0x4c6538>
+  86271c:	48 83 c4 28          	add    $0x28,%rsp
+  862720:	c3                   	ret
+  862721:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
+  862728:	00 00 00 
+  86272b:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  862730:	50                   	push   %rax
+  862731:	48 89 fe             	mov    %rdi,%rsi
+  862734:	ba d0 c9 ad 83       	mov    $0x83adc9d0,%edx
+  862739:	e8 02 23 02 00       	call   884a40 <fwrite@plt+0x4d66e8>
+  86273e:	58                   	pop    %rax
+  86273f:	c3                   	ret
+  862740:	48 83 ec 28          	sub    $0x28,%rsp
+  862744:	48 89 f9             	mov    %rdi,%rcx
+  862747:	48 89 74 24 08       	mov    %rsi,0x8(%rsp)
+  86274c:	48 89 14 24          	mov    %rdx,(%rsp)
+  862750:	c7 44 24 18 19 26 03 	movl   $0xc0032619,0x18(%rsp)
+  862757:	c0 
+  862758:	e8 a3 3f 00 00       	call   866700 <fwrite@plt+0x4b83a8>
+  86275d:	48                   	rex.W
+  86275e:	83                   	.byte 0x83
+  86275f:	c4                   	.byte 0xc4
