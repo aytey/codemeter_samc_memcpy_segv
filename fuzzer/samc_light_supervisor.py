@@ -175,8 +175,30 @@ def response_meta(samc, sock: socket.socket) -> tuple[dict[str, Any], bytes | No
     return meta, inner
 
 
+def _eager_dump_target_frame(worker_dir: Path, iteration: int, idx: int,
+                             plaintext: bytes, frame: dict[str, Any]) -> None:
+    """Persist a probable-trigger target-frame plaintext the instant it fails.
+
+    The in-memory ring + post-stop `dump_ring()` already captures this data,
+    but a worker can die between detection and the ring dump (OOM, SIGKILL,
+    namespace teardown). Eagerly writing the plaintext to a distinct
+    `target_frame_crash_candidates/` directory guarantees the probable-trigger
+    bytes are on disk before `run_one` returns, independent of the ring path.
+    """
+    try:
+        out_dir = worker_dir / "target_frame_crash_candidates"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        bin_path = out_dir / f"iter_{iteration:08d}_frame_{idx}.bin"
+        bin_path.write_bytes(plaintext)
+        frame["crash_candidate_path"] = str(bin_path)
+        frame["crash_candidate_sha256"] = sha256_hex(plaintext)
+    except OSError:
+        pass
+
+
 def run_one(samc, host: str, port: int, target_frame: int,
-            rng: random.Random, worker_id: int, iteration: int) -> tuple[str, dict[str, Any]]:
+            rng: random.Random, worker_id: int, iteration: int,
+            worker_dir: Path) -> tuple[str, dict[str, Any]]:
     """Run one stateful SAMC session attempt.
 
     A session attempt is:
@@ -253,12 +275,22 @@ def run_one(samc, host: str, port: int, target_frame: int,
             attempt["frames"].append(frame)
 
             if resp["status"] in {"none", "recv_exception"}:
-                status = "no_response" if idx < target_frame else "ok"
+                # Distinguish "session failed before we could exercise the
+                # target" from "target sent but daemon went silent". The
+                # latter is the primary crash-trigger candidate and must not
+                # be conflated with a clean "ok" outcome.
+                status = "no_response" if idx < target_frame else "target_no_response"
                 attempt["status"] = status
+                if idx == target_frame:
+                    _eager_dump_target_frame(worker_dir, iteration, idx, pt, frame)
                 return status, attempt
             if resp["status"] == "wire" and resp.get("inner_len") is None:
-                status = "decrypt_fail" if idx < target_frame else "ok"
+                # Same reasoning: a garbled reply at the target frame is a
+                # weaker but still-distinct crash-trigger candidate.
+                status = "decrypt_fail" if idx < target_frame else "target_decrypt_fail"
                 attempt["status"] = status
+                if idx == target_frame:
+                    _eager_dump_target_frame(worker_dir, iteration, idx, pt, frame)
                 return status, attempt
 
         status = "ok"
@@ -334,7 +366,8 @@ def worker_main(config: dict[str, Any], worker_id: int, seed: int, role: int,
             target_frame = role if role >= 0 else i % n_frames
             try:
                 status, attempt = run_one(
-                    samc, config["host"], config["port"], target_frame, rng, worker_id, i
+                    samc, config["host"], config["port"], target_frame, rng,
+                    worker_id, i, worker_dir,
                 )
             except BaseException:
                 status = "worker_exception"
@@ -361,6 +394,61 @@ def worker_main(config: dict[str, Any], worker_id: int, seed: int, role: int,
             counter.value = i + 1
     finally:
         dump_ring(worker_dir, ring, counts, reason, os.getpid())
+
+
+def write_crash_attribution(out_dir: Path) -> dict[str, Any]:
+    """Aggregate target-frame failure events across workers and sort by time.
+
+    When N workers share a daemon, a single daemon crash can surface as
+    target-frame failures on many workers — but only the worker whose send
+    actually tipped the daemon into the crash is the real trigger. `CLOCK_MONOTONIC`
+    is shared across processes on Linux, so `send_start_mono_ns` is directly
+    comparable. The earliest event is the most likely trigger; later events
+    from other workers are bystanders that saw the corpse.
+
+    Output: `<out_dir>/crash_attribution.json` with events sorted ascending
+    by `send_start_mono_ns`. Readers should treat `events[0]` as the probable
+    trigger and compare subsequent entries' timestamps to decide how tight
+    the attribution is.
+    """
+    events: list[dict[str, Any]] = []
+    for worker_dir in sorted(out_dir.glob("worker_*")):
+        manifest = worker_dir / "ring_manifest.jsonl"
+        if not manifest.exists():
+            continue
+        with manifest.open() as mf:
+            for line in mf:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("status") not in {"target_no_response", "target_decrypt_fail"}:
+                    continue
+                target_frame = entry.get("target_frame")
+                tf_frame = next(
+                    (f for f in entry.get("frames", []) if f.get("idx") == target_frame),
+                    None,
+                )
+                if tf_frame is None:
+                    continue
+                events.append({
+                    "worker_id": entry.get("worker_id"),
+                    "iteration": entry.get("iteration"),
+                    "target_frame": target_frame,
+                    "status": entry.get("status"),
+                    "send_start_mono_ns": tf_frame.get("send_start_mono_ns"),
+                    "send_end_mono_ns": tf_frame.get("send_end_mono_ns"),
+                    "plaintext_path": tf_frame.get("plaintext_path"),
+                    "plaintext_sha256": tf_frame.get("plaintext_sha256"),
+                    "crash_candidate_path": tf_frame.get("crash_candidate_path"),
+                    "mutation": tf_frame.get("mutation"),
+                })
+    events.sort(key=lambda e: (e["send_start_mono_ns"] is None, e["send_start_mono_ns"] or 0))
+    report = {"count": len(events), "events": events}
+    (out_dir / "crash_attribution.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
+    return report
 
 
 def sh(args: list[str], timeout: float = 2.0) -> str:
@@ -589,6 +677,7 @@ def supervisor(args: argparse.Namespace) -> int:
                 proc.kill()
 
     counts = [c.value for c in counters]
+    attribution = write_crash_attribution(out_dir)
     summary = {
         "result": result,
         "attempts": sum(counts),
@@ -598,6 +687,7 @@ def supervisor(args: argparse.Namespace) -> int:
         "end_pid": codemeter_pid(),
         "end_core": newest_core(core_dirs),
         "end_service_state": "skipped" if args.no_service_check else service_state(),
+        "crash_attribution_count": attribution["count"],
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print("summary=" + json.dumps(summary, sort_keys=True), flush=True)
