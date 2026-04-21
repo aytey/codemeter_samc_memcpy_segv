@@ -1,0 +1,164 @@
+========================================================================
+The function at CodeMeterLin + 0x8f3d60 — a type-dispatched copy/serialize
+routine. This is where frame #1 of the crash backtrace lives.
+========================================================================
+
+Prologue (0x8f3d60..0x8f3d77):
+
+  8f3d60:  push %rbp
+  8f3d61:  push %r15
+  8f3d63:  push %r14
+  8f3d65:  push %r13
+  8f3d67:  push %r12
+  8f3d69:  push %rbx
+  8f3d6a:  sub  $0x118, %rsp          ; 280 B locals frame
+  8f3d71:  mov  %r8,  %r13             ; r13 = arg5  (context / limit)
+  8f3d74:  mov  %rcx, %r12             ; r12 = arg4  (end pointer?)
+  8f3d77:  mov  %rdx, %rbp             ; rbp = arg3  (end pointer?)
+                                       ; arg2 (%rsi)   — kept alive as rsi
+                                       ; arg1 (%edi)   — saved to stack at 0xc(%rsp)
+
+Dispatch (low 4 bits of arg1 select a type tag):
+
+  8f3d8f:  mov  %edi, %eax
+  8f3d91:  and  $0xf,  %eax            ; tag = arg1 & 0xf
+  8f3d94:  cmp  $0x3,  %eax
+  8f3d9c:  jbe  8f3e12                 ; tag <= 3 → small-primitive path
+  8f3d9e:  cmp  $0x7,  %eax
+  8f3da1:  jae  8f3ef7                 ; tag >= 7 → large-primitive path
+  8f3da7:  cmp  $0x4,  %eax
+  8f3daa:  je   8f4182                 ; tag == 4 → composite path
+                                       ;            (add end += rsi then recurse)
+  8f3db0:  cmp  $0x6,  %eax
+  8f3db3:  jne  8f41ba                 ; tag == 5 → raw-byte-range path
+                                       ;            THIS IS THE CRASHING PATH
+                                       ; (falls through = tag == 6 → other)
+
+Tag-5 body (raw byte-range, crashes here):
+
+  8f41ba:  mov  $0xca639bcb, %edx
+  8f41bf:  xor  %ecx, %ecx
+  8f41c1:  call 8f4e60                 ; bookkeeping / stats call
+  8f41c6:  mov  %rbp, %rbx
+  8f41c9:  sub  %r12, %rbx             ; ★ length := rbp - r12 (arg3 - arg4)
+  8f41cc:  cmpb $0,    0x17d7a55(%rip) ; global flag
+  8f41d3:  jne  8f42f6                 ; if flag set, jump to GROW path
+  ...  (cheap in-place copy path, not taken in this crash)
+
+Tag-4 body (composite; recurses into tag-5 after pointer arithmetic):
+
+  8f4182:  cmp  %r13, %rbp             ; check rbp <= limit (r13 = arg5)
+  8f4185:  ja   8f4a8d
+  8f418b:  test %rbp, %rbp             ; must be non-zero
+  8f418e:  sete %al
+  8f4191:  test %rsi, %rsi             ; must be non-zero
+  8f4194:  sete %cl
+  8f4197:  or   %al, %cl
+  8f4199:  jne  8f433c
+  8f419f:  add  %rsi, %rbp             ; ★ rbp = rbp + rsi  (compute end ptr)
+  8f41a2:  mov  $0xd7b4dd5, %edi       ; tag = 0xd7b4dd5 → (& 0xf) == 5
+  8f41a7:  mov  %rbp, %rdx             ; recursive arg3 = new end
+  8f41aa:  mov  %rsi, %rcx             ; recursive arg4 = rsi (the old size/offset)
+  8f41ad:  mov  %r12, %r8              ; recursive arg5 = r12 (outer's arg4)
+  8f41b0:  call 8f3d60                 ; ★ RECURSE with tag=5
+  8f41b5:  jmp  8f4dfc                 ; frame #2's "return addr" — this is the
+                                       ; jmp that the recursive call returns
+                                       ; into.  (Not a real frame, just the
+                                       ; site of the recursive call.)
+
+GROW path (0x8f42f6) — reached from tag-5 when rbx > destination capacity:
+
+  8f42f6:  test %rbx, %rbx
+  8f42f9:  js   8f4b1f                 ; ONLY guard before use
+  8f42ff:  mov  %rbx, %rdi
+  8f4302:  call 8f3b70                 ; allocator — succeeds for 1.6 GB
+  8f4307:  mov  %rax, %r14
+  8f430a:  cmp  %r12, %rbp
+  8f430d:  je   8f431d
+  8f430f:  mov  %r14, %rdi             ; memcpy(dst, src=r12, len=rbx)
+  8f4312:  mov  %r12, %rsi
+  8f4315:  mov  %rbx, %rdx
+  8f4318:  call 3acd00 <memcpy@plt>    ; ★ SIGSEGV here
+  8f431d:  lea  0x10(%r13), %r12       ; (continuation code after memcpy)
+
+========================================================================
+Implication for the crash path
+========================================================================
+
+The backtrace shows frame #1 at +0x8f431d AND frame #2 at +0x8f41b5.
+These are BOTH inside the same function (0x8f3d60..). Frame #2 is the
+recursive-call return site at 0x8f41b0. Because no frame pointers are
+saved, GDB's stack unwinder labels the recursion as a distinct frame.
+
+So the crash path is almost certainly:
+
+  (some caller)
+    → call 0x8f3d60 with  (tag=4, rsi=SOME_SIZE, rdx=SOME_BEGIN,
+                            rcx=..., r8=SOME_LIMIT)
+    → tag-4 body:
+         assert rdx (=rbp) and rsi non-zero
+         rbp += rsi        ;  end = begin + size
+         call 0x8f3d60 again with (tag=5, rdx=end, rcx=rsi, r8=begin)
+    → tag-5 body:
+         rbx = rbp - r12   ;  = (begin + size) - size = begin
+         js <if neg>;  alloc(rbx); memcpy(dst, src=r12, len=rbx)
+         ★ if `rbp` (the computed end pointer) is in unmapped memory,
+           memcpy walks off the source mapping and SEGVs.
+
+Concretely in the core:
+
+  rbx (length)  = 0x612b09cb           ; this is the OUTER arg3 (=begin_ptr
+                                       ;  treated as length by the recursive
+                                       ;  tag-5 call)
+  r12 (src)     = 0x7ff0ac00db74       ; this is the OUTER arg2 (=size value
+                                       ;  treated as pointer by the recursive
+                                       ;  tag-5 call)
+  rbp (src end) = 0x7ff10d2be53f       ; = r12 + rbx  (outer's begin+size)
+
+Which means the OUTER caller of 0x8f3d60 (at tag=4) supplied:
+
+  arg2 (size-ish) = 0x7ff0ac00db74     ; a heap-looking value (~140 TB)
+                                       ;  — clearly a POINTER value landing
+                                       ;  in a size slot
+  arg3 (begin-ish) = 0x612b09cb        ; a ~1.6 GB number in a pointer slot
+                                       ;  — clearly a SIZE value landing
+                                       ;  in a pointer slot
+
+This is the signature of a **(pointer, size) pair passed in the wrong
+argument order** to a dispatch helper that was designed to accept
+(begin-ptr, size).  Either the outer caller swapped the two, or the
+fields in the structure it's pulling from are inconsistent with how
+they're being consumed here.
+
+========================================================================
+Candidate bug locations
+========================================================================
+
+All static call sites of 0x8f3d60 and their tag (low 4 bits of the
+immediate loaded into %edi just before the call):
+
+  0x8f3459  tag = 1   (arg = 0x4a5c4f91)
+  0x8f3bf9  tag = 9   (arg = 0x50fe2869)
+  0x8f3f52  tag = 0   (arg = 0xa7be6080)
+  0x8f408b  tag = 0   (arg = 0xe95fe4c0)
+  0x8f411a  tag = 3   (arg = 0x9e9f95a3)
+  0x8f4161  tag = 2   (arg = 0xc8591912)
+  0x8f41b0  tag = 5   (RECURSIVE, from inside tag-4 body)
+  0x8f44c8  tag = 6   (arg = 0xda43d0e6)   — inside dispatch, looks like a
+                                              branch variant
+  0x8f4892  tag = 6   (arg = 0xda43d0e6)   —        "        "
+  0x8f48f9  tag = 7   (arg = 0x18bd3577)
+  0x8f548c  tag = 4   (arg = 0x2ff3ff34)   ★ the one known external tag-4 caller
+
+The call site at 0x8f548c IS a tag-4 caller and therefore a strong
+candidate for the outer frame of the crashing recursion. It's reached
+from whichever function built the r15-object whose vtable is at
++0x88a4c0 (the C++ class with four std::vector members).
+
+The exact input field that ends up as arg2/arg3 at that call is a
+straightforward source-code lookup for Wibu; without source it would
+require either:
+  (a) stepping backward from 0x8f548c's arg setup, tracing where its
+      %rdx/%rsi come from, or
+  (b) tightening the fuzzer to attribute which input bytes map to the
+      bad arg values (the plan in ../NEXT_STEPS_PROCESS.md).

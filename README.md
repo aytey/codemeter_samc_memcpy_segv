@@ -55,12 +55,52 @@ isn't a real pointer. The subtraction yields
 satisfies, and memcpy then walks off the end of the source mapping at
 `0x7ff0aca48000 + 0xba4 = 0x7ff0aca48ba4` — the fault address.
 
-**The bug is therefore not "trust the length field from the packet"
-but "compute a length from two pointers without validating that both
-pointers describe a consistent range."** The fix direction changes
-accordingly: not a bounds-check on a size field, but a range-validity
-check on the `%rbp` pointer before the subtraction at `+0x8f41c9`.
+Backward disassembly shows the containing function (`CodeMeterLin +
+0x8f3d60`) is a **type-dispatched serialize / copy helper** that takes
+`(tag, arg2, arg3, arg4, arg5)` and uses the low 4 bits of `tag` to pick
+a branch. Two branches matter:
 
+- **tag = 4** (composite): `rbp := arg3`, `rsi := arg2`, then
+  `rbp += rsi`, then **recursively call the helper with tag = 5** and
+  args shifted into `(arg3 = rbp_new, arg4 = rsi, arg5 = arg4_old)`.
+- **tag = 5** (raw byte range): `rbx = rbp - r12`; allocate `rbx` bytes;
+  `memcpy(new, r12, rbx)`. The only guard is `js <negative>`.
+
+Combining the two shows the crash path arithmetic:
+
+```
+caller invokes helper(tag=4, arg2 = S, arg3 = P, …)
+  → rbp = P, rsi = S  → rbp += rsi (=P+S)
+  → helper(tag=5, arg3 = P+S, arg4 = S, …)
+       → r12 = S, rbp = P+S  → rbx = rbp - r12 = P
+       → memcpy( alloc(P), src=S, len=P )           // SEGV
+```
+
+In our core: `P = 0x612b09cb` (~1.6 GB), `S = 0x7ff0ac00db74` (a heap-
+looking pointer). **Those two are clearly a length and a pointer in
+swapped positions** — the caller passed `(size, pointer)` to a helper
+that expected `(pointer, size)`, or pulled them from a structure laid
+out the opposite way.
+
+### The outer caller
+
+Exactly one external call site invokes this helper with tag=4: at
+**`CodeMeterLin + 0x8f548c`**. Its argument setup is:
+
+```
+ 8f5472:  lea  0x88(%r15), %rcx        ; arg4 = &r15[0x88]
+ 8f5479:  lea  0x14(%rbx), %rsi        ; arg2 = &rbx[0x14]
+ 8f547d:  movabs $0x7fffffffffffffff, %r8    ; arg5 = LLONG_MAX
+ 8f5487:  mov  $0x2ff3ff34, %edi       ; tag & 0xf = 4
+ 8f548c:  call 0x8f3d60
+```
+
+with `%rdx` (arg3) set earlier in that caller's body. From source, the
+fields in `*rbx` / `*r15` mapped to arg2/arg3 are directly recognisable
+and the fix is a bound check on the size value before the call, or on
+`rbx` before the allocator at `+0x8f302`.
+
+Full annotated dispatch: [`disasm/dispatch_function_at_0x8f3d60.txt`](disasm/dispatch_function_at_0x8f3d60.txt)
 Full annotated call site: [`disasm/memcpy_call_site_annotated.txt`](disasm/memcpy_call_site_annotated.txt)
 Full objdump excerpt: [`disasm/crash_site_0x8f431d.txt`](disasm/crash_site_0x8f431d.txt)
 
