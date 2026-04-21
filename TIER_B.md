@@ -110,58 +110,135 @@ So we describe the class as "the samc request-parser object with
 tag byte `0x5e`, vtable `+0x88a4c0`, four `std::vector` members." Wibu
 can name it from source in seconds.
 
-## B-4 (partial): upper call chain
+## B-4 (DONE): upper call chain and opcode attribution
 
-Backtrace above the parser:
+Re-analysed from the archived core
+(`core.CodeMeterLin.477656.1776755891`). The earlier read of frame #6
+conflated two adjacent functions; the true dispatcher is one frame
+higher.
+
+Corrected call chain (static VMAs, PIE-relative):
 
 ```
-#4  0x8f3c36   (≈ vtable-slot-0 dtor — destructor being walked because
-                of stack unwind? or reached from inside another vcall?)
-#5  0x87647e   → CONSTRUCTION SITE OF THE CLASS
-#6  0x86271c   → switch/jump-table dispatch:
-                  rax = base_table + *(u32-case + const)
-                  jmp  *rax
-                This is the shape of a C++ `switch` or a hand-rolled
-                vector-of-handlers. Almost certainly the samc-opcode
-                dispatcher — which command byte in the cleartext
-                plaintext picks this class to instantiate.
-#7  0x805ab5   → vcall via `call *0x10(%rax)` on a global object at
-                `fs:0x18c60e6(%rip)` — looks like a per-thread message
-                context or allocator lookup.
-#8  0x803884   — per-connection worker scaffolding
-#9  0x7fd921   — per-connection read / decrypt loop
+#4  0x8f3c36   vtable[4] parser entry of the tag-0x5e class
+#5  0x87647e   return addr inside 0x874890 — the class-construction
+                and "invoke vtable[4]" site. At 0x876478:
+                  call *0x1614062(%rip)      = *(0x1e8a4e0) = vtable[4]
+                Vtable of this class is at static 0x1e8a4c0; tag byte
+                0x5e is written at `this+0x29` during construction.
+#6  0x86271c   return addr inside an argument-shuffling thunk at
+                0x862700. The thunk's body is:
+                  sub  $0x28, %rsp
+                  mov  %rdi, 0x8(%rsp)
+                  movl $0x86687a5d, 0x18(%rsp)   ; dispatch tag
+                  mov  %rdx, %rdi
+                  mov  %rsi, %r9
+                  call 0x874890
+                  add  $0x28, %rsp
+                  ret
+                0x862700 has zero direct callers — it is only reached
+                by tail-jmp from the opcode-dispatcher below.
+#7  0x87005ab5 return addr after `call *0x10(%rax)` where
+                rax = (per-connection singleton at *(0x20cbb88))->vtable.
+                The vcall target is 0x5e36e0 — the opcode dispatcher
+                (see below). Tail-jmp semantics make it "invisible"
+                in the backtrace.
+#8  0x87003884 thunk with dispatch tag 0x8119da18 calling 0x87004940.
+#9  0x86ffd921 per-connection read/decrypt loop.
 ```
 
-Frame #5's key instruction (`87647e`) is right after `call *0x1614062(%rip)`
-which equals `*(0x1e8a4e0)` = `vtable_at_0x88a4c0[4]` (slot 4). So the
-pattern at frame #5 is "construct a parser object, then invoke its
-vtable[4]" — that's the "parse me" virtual method.
+### The opcode dispatcher at 0x5e36e0
 
-Frame #6 (the jump-table dispatcher) is the code that selects *which*
-class to construct for each samc opcode. We didn't fully decode its
-jump table because the jump-target lookup uses two runtime u32 globals
-(`0x1f33a40`, `0x1f33a50`); from source, identifying the handler for
-tag-byte `0x5e` is trivial. From static analysis alone, we can confirm
-this function is a switch-dispatcher but we can't enumerate its cases
-without dynamic state.
+Frame #7's vcall goes into `0x5e36e0`, which is a classical RB-tree
+`find` implementation with the following in-core structure:
+
+```
+per-connection singleton (static 0x20cbb88 → heap object)
+  +0x00  vtable_0  (primary base)
+  +0x08  vtable_1  (secondary base — multiple inheritance)
+  +0x20  pointer to tree-root node  ────────┐
+  +0x38  size_t node_count (= 65)           │
+                                            │
+Each tree node:                             │
+  +0x10  left child          ◄──────────────┘
+  +0x18  right child
+  +0x20  pointer to { HandlerStruct* obj; byte key; ... }
+                      ^---+0x00---^    ^---+0x08---^
+
+Inner find loop (0x5e3710..0x5e372b):
+   r9  = *(node + 0x20)      ; value ptr
+   cmp al, *(r9 + 0x8)       ; input_byte vs node_key
+   setb r10b
+   node = *(node + 0x10 + r10*8)   ; recurse left (0) or right (8)
+
+Tail-jmp on found node (0x5e3747..0x5e374e):
+   rdi = *(rcx + 0x20)        ; value ptr of found node
+   rax = *rdi                 ; handler struct
+   rax = *(rax + 0x10)        ; handler fn ptr
+   jmp *rax
+```
+
+The map is populated with **65 entries** — see
+[`disasm/opcode_dispatch_map.txt`](disasm/opcode_dispatch_map.txt) for the
+full dump. The entry for the vulnerable opcode:
+
+```
+opcode 0x5e  →  handler struct 0x01e88868
+              →  fn ptr 0x00862700   ← the arg-shuffling thunk above
+```
+
+### Answer to "which SAMC opcode triggers this?"
+
+**Opcode byte `0x5e`.** The same byte is used as both:
+
+1. The *first byte of the SAMC plaintext*, read as `*rsi` by the map
+   `find` at `0x5e36e0`, selecting handler `0x862700`.
+2. The *class-instance tag* written at `this+0x29` during construction
+   inside `0x874890`.
+
+This matches the on-wire reproducer in
+[`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py):
+the five-byte plaintext prefix `5e 35 5e d6 f2` is what makes the
+daemon route into the 0x5e handler — the appended "canonical HELLO"
+bytes become the payload that supplies the malicious u32 at offset
+`+0xc`. There is no dedicated "HELLO mutation"; it is a crafted SAMC
+frame with opcode `0x5e`.
+
+### Earlier (incorrect) hypothesis — why it was off
+
+The previous draft of this doc identified the short function at
+`0x862680` (the `jmp *%rax` one with `*0x1f33a50 + *0x1f33a40 + eax`)
+as "the switch-dispatcher." That function *is* a computed-jump
+trampoline, but reading the globals from the archived core shows:
+
+```
+*(0x1f33a50) = 0x562aa4c8d334     (heap-anchor pointer)
+*(0x1f33a40) = 0x5b9e4c08         (u32 offset constant)
+```
+
+and its helper at `0x862eb0` is a single `jmp 0x85f6d0`, which is a
+**lazy config reader** that returns `*(0x20f2544)` — a cached u32
+sourced from a vcall on a config-holder object (key index 1). It is
+config-selected at daemon startup, not opcode-selected per request.
+So `0x862680` is unrelated to opcode dispatch; the real dispatch is
+the std::map described above.
 
 ## Summary for Wibu
 
 1. **Specific vulnerable code**: `+0x8f548c` reads `*(uint32_t*)(rbx + 0xc)`
    from a parse-state input buffer and forwards it (untyped, unbounded)
    as a length into the dispatch helper at `+0x8f3d60`.
-2. **Triggering input**: a samc cleartext payload whose sub-structure at
-   offset 0xc carries a u32 length field > ~64 MB (or whatever the real
-   daemon-wide limit should be). The payload eventually routes into the
-   class constructed at `+0x876449` (vtable `+0x88a4c0`, tag byte `0x5e`)
-   via the switch-dispatcher at `+0x86271c`.
+2. **Triggering input**: a samc cleartext frame whose **opcode byte
+   (plaintext offset 0) is `0x5e`** and whose u32 at offset `+0xc` is
+   large enough that the source pointer walks past the readable mapping
+   (≥ ~2 MB past the per-request heap allocation suffices on stock
+   builds). The opcode dispatcher is the `std::map<byte, Handler*>::find`
+   at `+0x5e36e0`, invoked from `+0x87005aa2` as
+   `*((*(0x20cbb88))->vtable[2])`.
 3. **Fix**: bound `*(u32*)(rbx + 0xc)` against either the remaining
    payload size or `Server.ini`'s `MaxMessageLen` at the call site
    `+0x8f5460..+0x8f548c`. An extra safety net at the allocator
    `+0x8f3b70` (reject `> N MB`) would also catch any missed caller.
-4. **Reproducibility**: this is a **single-session, single-packet bug**
-   once the upstream command opcode is identified. Our 16-worker
-   stochastic setup finds it only because random mutation has to land a
-   huge value in the specific 4-byte window; you can replace the
-   campaign with a one-shot repro as soon as you know which samc opcode
-   dispatches to this class.
+4. **Reproducibility**: **single-session, single-packet bug.** The
+   deterministic reproducer is
+   [`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py).

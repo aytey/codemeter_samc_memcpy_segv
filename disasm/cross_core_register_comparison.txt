@@ -1,0 +1,68 @@
+# Cross-core register comparison (Tier C-7)
+#
+# For every archived crash core we verified:
+#   frame #0  __memmove_evex_unaligned_erms   (libc)
+#   frame #1  CodeMeterLin + 0x8f431d         (identical PIE offset)
+#   frame #2  CodeMeterLin + 0x8f41b5         (identical PIE offset)
+#   frame #3  CodeMeterLin + 0x8f5491         (identical PIE offset)
+#
+# All 12 cores have the same crash signature. The registers below are
+# read from frame #1 of thread 1 in each core. The invariant
+#   rbx == rbp - r12
+# holds in every core (confirmed: memcpy length = supposed_end - start).
+#
+# core id                   rbx (memcpy len) dec         rdx        rbp - r12  match?
+# ------------------------- --------------- ----------- ----------- --------- -------
+#  pid=126963               0x388ad023      948,621,347 0xff3       0x388ad023  yes
+#  pid=283570               0x0b03ed4c      184,806,732 0xd1c       0x0b03ed4c  yes
+#  pid=3759907              0x612b09cb    1,630,210,507 0x99b       0x612b09cb  yes
+#  pid=3784150              0x612b09cb    1,630,210,507 0x99b       0x612b09cb  yes
+#  pid=3803510              0x0b40a4a2      188,785,826 0x472       0x0b40a4a2  yes
+#  pid=3806387              0x612b09cb    1,630,210,507 0x99b       0x612b09cb  yes
+#  pid=3831980              0x0b40a4a2      188,785,826 0x472       0x0b40a4a2  yes
+#  pid=385080               0xcde2a66f    3,454,183,023 0x263f      0xcde2a66f  yes
+#  pid=3873376              0x000be5fd          779,773 0xbe5fd     0x000be5fd  yes
+#  pid=3991892              0x000be45e          779,358 0xbe45e     0x000be45e  yes
+#  pid=419226               0x612b09cb    1,630,210,507 0x99b       0x612b09cb  yes
+#  pid=477656 (main core)   0x612b09cb    1,630,210,507 0x99b       0x612b09cb  yes
+#
+# Distinct rbx values: 7
+#   0x612b09cb  (5 cores) — a recurring malformed 4-byte field, probably
+#                           the same test-seed rediscovered by several
+#                           workers
+#   0x0b40a4a2  (2 cores)
+#   0x000be5fd, 0x000be45e  — two near-identical values, 1 bit apart at
+#                             byte offset 1 (lsb 0xfd vs 0x5e → 0x00)
+#   0x388ad023, 0x0b03ed4c, 0xcde2a66f  — unique per-core
+#
+# Interpretation
+#
+# 1. `rbx` is input-controlled across crashes — the memcpy length varies
+#    from ~760 KB (0xbe45e) up to ~3.2 GB (0xcde2a66f). This rules out a
+#    fixed-sentinel or enum-matched trap and matches the TIER_B B-5
+#    finding that the length is sourced from
+#    `*(uint32_t*)(parsed_buffer + 0xc)` in the tag-0x5e parser caller.
+#
+# 2. In two cores (3873376 and 3991892) `rdx == rbx`. In the others `rdx`
+#    is a much smaller number. This says the dispatch helper at
+#    `+0x8f3d60` sometimes forwards the full length as `rdx` (arg3) and
+#    sometimes further divides it into chunks — a tag-4 vs tag-5 path
+#    split inside the dispatcher. Either way, the *aggregate* copy
+#    length is `rbx = rbp - r12`.
+#
+# 3. `r14` (destination pointer) is always page-aligned (`0x...010`).
+#    Consistent with a fresh allocator-returned buffer. There is no
+#    case where the destination is NULL, which rules out
+#    "allocation-failure → zero-destination" hypotheses.
+#
+# 4. `r12` (source start) is a plausible per-request heap pointer in
+#    every core. The crash is always a source *over-read*, not a
+#    destination over-write.
+#
+# Upshot for Wibu
+#
+# The length that drives the faulting `memcpy` is under attacker control
+# and reaches ~3 GB in the wild. The `MaxMessageLen` cap in the daemon
+# does not flow into this call site; a bound needs to be applied at
+# `+0x8f5460..+0x8f548c` (where `*(u32*)(rbx+0xc)` is read) or at the
+# dispatch helper `+0x8f3d60` itself.
