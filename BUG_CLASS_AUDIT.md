@@ -158,11 +158,48 @@ this too is a sibling.
    to the template(s) that got instantiated as these helpers.** Each
    such caller is a potential hole.
 
-## Suggested next step (for us, not Wibu)
+## SAMC reachability of the candidate sites
 
-Targeted fuzz of all 64 not-yet-tested opcodes — the existing
-supervisor (`fuzzer/samc_light_supervisor.py`) only mutates HELLO; we
-can extend it so each worker sweeps a distinct opcode prefix out of
-the 65-entry dispatch map (`disasm/opcode_dispatch_map.txt`). If
-either `0x8be8f0` or `0x91c770` is reached by any opcode, crashes
-should surface within hours of fleet time.
+A static-callgraph analysis (direct `call imm` edges only, bridged once
+through vtable slots found in .rodata) answers the reachability
+question for each of the 65 SAMC opcodes dumped in
+[`disasm/opcode_dispatch_map.txt`](disasm/opcode_dispatch_map.txt):
+
+| target parser-caller | vtables | constructor fn(s) | SAMC opcodes that reach the constructor |
+|----------------------|---------|-------------------|-----------------------------------------|
+| `0x8f4e60` (known)   | `0x1e8a4c0` | `0x874890` (+ dtor installs `0x8f3c40`, `0x8f3cc0`) | **61 of 65** (opcode `0x5e` is one of them) |
+| `0x8be8f0` (candidate) | `0x1e896e0` | `0x8be780`, `0x8be800` | **0 of 65** |
+| `0x91c770` (candidate) | `0x1e8aaf0` | `0x9168c0` | **0 of 65** |
+
+The 4 of 65 opcodes that don't reach `0x874890` (`0x7e`, `0x80`,
+`0x89`, `0x8a`) are lazy-init config-reader thunks in the `0x85e000`
+range, not parser dispatches.
+
+### What this means
+
+- The confirmed bug at `0x8f548c` is the **only** member of this bug
+  class reachable from the client-facing SAMC dispatcher. A point-fix
+  bounding `*(u32)(rbx+0xc)` at `0x8f5460..0x8f548c` is sufficient to
+  close the SAMC attack surface.
+- The candidate sites at `0x8bea35` and `0x91d804` still *exist* as
+  unbounded `memcpy` patterns, but they live on functions that no
+  SAMC opcode reaches. They may be reachable from a different
+  surface (daemon↔server responses, license-file parsing, admin
+  channels, or internal-only state); we did not trace those.
+- The systemic helper-level fix suggested above remains the cleaner
+  remediation if Wibu wants defence-in-depth against future callers
+  that might reintroduce the pattern.
+
+### Method note
+
+The bridging step is a one-level walk: for each direct caller of
+a target parser-caller, if the caller's function body is < 0x80 B
+(looks like a vtable-slot thunk), the caller's entry-point address
+is searched byte-for-byte in the binary data to find it used as a
+code pointer in `.rodata`. The 8-byte-aligned hits are vtables;
+walking backward over code-pointer-shaped words identifies the
+vtable base. That base's VMA is then searched as a `lea` target in
+text to find the constructor. If a deeper chain of vtable hops
+existed (e.g., the constructor itself is installed by *another*
+vtable), this would miss it; we manually inspected the few
+reference sites involved and they were all leaf constructors.
