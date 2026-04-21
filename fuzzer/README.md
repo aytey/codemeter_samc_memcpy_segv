@@ -13,12 +13,16 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 | `samc_session_data.py` | canonical cleartext plaintexts captured from a real testbench session |
 | `samc_replay.py` | single-input replay harness (for crash triage) |
 | `run_samc_fuzz_parallel.sh` | launches N concurrent workers (default 16) |
+| `fuzz_farm_launcher.py` | host-side driver for multi-farm namespaced fuzzing with crash-signature bucketing and auto-restart |
+| `fuzz_farm_namespace_init.sh` | PID-1 init script each farm's namespace runs; mounts, starts daemon, execs supervisor |
 
-For the planned multi-daemon scale-out design, see
-[`../MULTI_INSTANCE_FUZZING.md`](../MULTI_INSTANCE_FUZZING.md). The short
-version: Linux namespaces can run multiple isolated `CodeMeterLin` instances on
-the same host, but each farm needs private `/tmp`, `/dev/shm`, config/state
-directories, IPC, and network namespaces.
+For the multi-daemon scale-out design and what the first 1-hour 8×10 run
+revealed, see [`../MULTI_INSTANCE_FUZZING.md`](../MULTI_INSTANCE_FUZZING.md).
+The short version: Linux namespaces can run multiple isolated `CodeMeterLin`
+instances on the same host, each farm needs private `/tmp`, `/dev/shm`,
+config/state directories, IPC, and network namespaces, and the supervisor
+needs `--no-service-check` and a restricted `--core-dir` to work correctly
+inside a farm.
 
 ## Prerequisites
 

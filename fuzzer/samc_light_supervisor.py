@@ -384,10 +384,13 @@ def service_state() -> str:
         return f"unknown:{type(exc).__name__}"
 
 
-def newest_core() -> dict[str, Any] | None:
-    """Return the newest CodeMeter core from raw-core or systemd locations."""
+DEFAULT_CORE_DIRS = (Path("/var/tmp/cm_cores"), Path("/var/lib/systemd/coredump"))
+
+
+def newest_core(core_dirs: tuple[Path, ...] = DEFAULT_CORE_DIRS) -> dict[str, Any] | None:
+    """Return the newest CodeMeter core from the configured core directories."""
     newest: tuple[int, Path] | None = None
-    for root in (Path("/var/tmp/cm_cores"), Path("/var/lib/systemd/coredump")):
+    for root in core_dirs:
         if not root.exists():
             continue
         for path in root.glob("*CodeMeterLin*"):
@@ -413,9 +416,14 @@ def listener_ready(port: int) -> bool:
     return f":{port}" in out
 
 
-def ensure_daemon(port: int) -> None:
-    """Start CodeMeter if needed and wait until PID and listener are visible."""
-    if service_state() != "active":
+def ensure_daemon(port: int, check_service: bool = True) -> None:
+    """Start CodeMeter if needed and wait until PID and listener are visible.
+
+    When `check_service` is False (used inside namespaced fuzz farms where the
+    in-ns daemon is not systemd-managed), skip the systemctl probe/start
+    entirely and only poll for PID + listener.
+    """
+    if check_service and service_state() != "active":
         subprocess.run(["sudo", "systemctl", "start", "codemeter"], check=False, timeout=30)
     for _ in range(30):
         if codemeter_pid() and listener_ready(port):
@@ -452,10 +460,11 @@ def supervisor(args: argparse.Namespace) -> int:
     """Start workers, watch the daemon, stop on the first crash signal."""
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    ensure_daemon(args.port)
+    ensure_daemon(args.port, check_service=not args.no_service_check)
 
+    core_dirs = tuple(Path(d) for d in args.core_dir) if args.core_dir else DEFAULT_CORE_DIRS
     baseline_pid = codemeter_pid()
-    baseline_core = newest_core()
+    baseline_core = newest_core(core_dirs)
     start_wall = time.time()
     start_mono = time.monotonic()
     roles = roles_for(args.workers, args.mode)
@@ -513,11 +522,11 @@ def supervisor(args: argparse.Namespace) -> int:
                 break
 
             cur_pid = codemeter_pid()
-            cur_core = newest_core()
+            cur_core = newest_core(core_dirs)
             if now - last_listener_check >= args.listener_check_interval:
                 listener_is_ready = listener_ready(args.port)
                 last_listener_check = now
-            if now - last_service_check >= args.service_check_interval:
+            if not args.no_service_check and now - last_service_check >= args.service_check_interval:
                 current_service_state = service_state()
                 last_service_check = now
             core_changed = (
@@ -529,7 +538,7 @@ def supervisor(args: argparse.Namespace) -> int:
             )
             pid_changed = cur_pid != baseline_pid
             listener_down = not listener_is_ready
-            service_inactive = current_service_state != "active"
+            service_inactive = (not args.no_service_check) and current_service_state != "active"
             workers_exited = all(not p.is_alive() for p in procs)
             # Stop on the earliest reliable crash signal. A core may take a
             # moment to finish writing, and systemd may still report `active`
@@ -587,8 +596,8 @@ def supervisor(args: argparse.Namespace) -> int:
         "worker_pids": [p.pid for p in procs],
         "worker_exitcodes": [p.exitcode for p in procs],
         "end_pid": codemeter_pid(),
-        "end_core": newest_core(),
-        "end_service_state": service_state(),
+        "end_core": newest_core(core_dirs),
+        "end_service_state": "skipped" if args.no_service_check else service_state(),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print("summary=" + json.dumps(summary, sort_keys=True), flush=True)
@@ -615,6 +624,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--service-check-interval", type=float, default=1.0)
     ap.add_argument("--progress-interval", type=int, default=30)
     ap.add_argument("--worker-join-timeout", type=float, default=8.0)
+    ap.add_argument("--no-service-check", action="store_true",
+                    help="skip systemctl probes (use inside namespaced fuzz farms where "
+                         "the daemon is not systemd-managed)")
+    ap.add_argument("--core-dir", action="append",
+                    help="core-dump directory to watch; repeat to watch multiple. "
+                         "Default: /var/tmp/cm_cores and /var/lib/systemd/coredump. "
+                         "Inside a namespaced farm, restrict to the farm-private dir "
+                         "so cross-farm crashes don't masquerade as self-crashes.")
     return ap.parse_args()
 
 
