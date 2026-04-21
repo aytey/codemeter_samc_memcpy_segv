@@ -64,6 +64,8 @@ python3 repro_prefixed_hello_standalone.py
 ```
 
 Use `--dry-run` to construct and print the packet summary without sending it.
+Like the import-based version, it automatically uses the ECDH-selected `0xa1`
+channel for non-loopback targets.
 
 ACK-side candidate reproducer:
 
