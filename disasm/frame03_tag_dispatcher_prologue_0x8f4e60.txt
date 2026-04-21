@@ -1,0 +1,38 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000008f4e60 <.text+0x546b00>:
+  8f4e60:	55                   	push   %rbp
+  8f4e61:	41 57                	push   %r15
+  8f4e63:	41 56                	push   %r14
+  8f4e65:	41 55                	push   %r13
+  8f4e67:	41 54                	push   %r12
+  8f4e69:	53                   	push   %rbx
+  8f4e6a:	48 83 ec 48          	sub    $0x48,%rsp
+  8f4e6e:	4c 89 c5             	mov    %r8,%rbp
+  8f4e71:	48 89 cb             	mov    %rcx,%rbx
+  8f4e74:	41 89 d5             	mov    %edx,%r13d
+  8f4e77:	49 89 f7             	mov    %rsi,%r15
+  8f4e7a:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
+  8f4e81:	00 00 
+  8f4e83:	48 89 44 24 40       	mov    %rax,0x40(%rsp)
+  8f4e88:	89 d0                	mov    %edx,%eax
+  8f4e8a:	83 e0 1f             	and    $0x1f,%eax
+  8f4e8d:	83 f8 0b             	cmp    $0xb,%eax
+  8f4e90:	89 54 24 04          	mov    %edx,0x4(%rsp)
+  8f4e94:	72 38                	jb     8f4ece <fwrite@plt+0x546b76>
+  8f4e96:	83 f8 12             	cmp    $0x12,%eax
+  8f4e99:	73 6b                	jae    8f4f06 <fwrite@plt+0x546bae>
+  8f4e9b:	83 c0 f5             	add    $0xfffffff5,%eax
+  8f4e9e:	48 8d 0d 67 9d f6 00 	lea    0xf69d67(%rip),%rcx        # 185ec0c <_fini@@Base+0x24dd0>
+  8f4ea5:	48 63 04 81          	movslq (%rcx,%rax,4),%rax
+  8f4ea9:	48 01 c8             	add    %rcx,%rax
+  8f4eac:	ff e0                	jmp    *%rax
+  8f4eae:	89 5c 24 3c          	mov    %ebx,0x3c(%rsp)
+  8f4eb2:	e8 49 1d b1 ff       	call   406c00 <fwrite@plt+0x588a8>
+  8f4eb7:	48 8b 78 18          	mov    0x18(%rax),%rdi
+  8f4ebb:	8b 54 24 3c          	mov    0x3c(%rsp),%edx
+  8f4ebf:	48                   	rex.W

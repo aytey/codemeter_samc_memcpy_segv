@@ -1,0 +1,24 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000862680 <.text+0x4b4320>:
+  862680:	53                   	push   %rbx
+  862681:	48 89 fb             	mov    %rdi,%rbx
+  862684:	e8 27 08 00 00       	call   862eb0 <fwrite@plt+0x4b4b58>
+  862689:	48 8b 0d c0 13 6d 01 	mov    0x16d13c0(%rip),%rcx        # 1f33a50 <_fini@@Base+0x6f9c14>
+  862690:	8b 15 aa 13 6d 01    	mov    0x16d13aa(%rip),%edx        # 1f33a40 <_fini@@Base+0x6f9c04>
+  862696:	01 d0                	add    %edx,%eax
+  862698:	05 e7 cc ff ff       	add    $0xffffcce7,%eax
+  86269d:	48 98                	cltq
+  86269f:	48 01 c8             	add    %rcx,%rax
+  8626a2:	be 10 00 00 00       	mov    $0x10,%esi
+  8626a7:	48 89 df             	mov    %rbx,%rdi
+  8626aa:	ba 4a f9 9c 5d       	mov    $0x5d9cf94a,%edx
+  8626af:	5b                   	pop    %rbx
+  8626b0:	ff e0                	jmp    *%rax
+  8626b2:	66                   	data16
+  8626b3:	2e                   	cs
+  8626b4:	0f                   	.byte 0xf

@@ -1,0 +1,33 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000805a60 <.text+0x457700>:
+  805a60:	41 89 c5             	mov    %eax,%r13d
+  805a63:	48 8b 4c 24 30       	mov    0x30(%rsp),%rcx
+  805a68:	48 89 ca             	mov    %rcx,%rdx
+  805a6b:	89 cf                	mov    %ecx,%edi
+  805a6d:	45 89 e0             	mov    %r12d,%r8d
+  805a70:	48 8b 74 24 48       	mov    0x48(%rsp),%rsi
+  805a75:	41 89 f1             	mov    %esi,%r9d
+  805a78:	44 89 8c 24 a0 00 00 	mov    %r9d,0xa0(%rsp)
+  805a7f:	00 
+  805a80:	44 89 44 24 78       	mov    %r8d,0x78(%rsp)
+  805a85:	89 7c 24 24          	mov    %edi,0x24(%rsp)
+  805a89:	48 89 9c 24 88 00 00 	mov    %rbx,0x88(%rsp)
+  805a90:	00 
+  805a91:	48 89 4c 24 30       	mov    %rcx,0x30(%rsp)
+  805a96:	48 89 44 24 50       	mov    %rax,0x50(%rsp)
+  805a9b:	48 8b 3d e6 60 8c 01 	mov    0x18c60e6(%rip),%rdi        # 20cbb88 <_fini@@Base+0x891d4c>
+  805aa2:	48 8b 07             	mov    (%rdi),%rax
+  805aa5:	48 89 74 24 48       	mov    %rsi,0x48(%rsp)
+  805aaa:	48 89 94 24 b0 00 00 	mov    %rdx,0xb0(%rsp)
+  805ab1:	00 
+  805ab2:	ff 50 10             	call   *0x10(%rax)
+  805ab5:	48 89 c6             	mov    %rax,%rsi
+  805ab8:	45 31 f6             	xor    %r14d,%r14d
+  805abb:	48 85 c0             	test   %rax,%rax
+  805abe:	0f                   	.byte 0xf
+  805abf:	84                   	.byte 0x84
