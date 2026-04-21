@@ -172,6 +172,81 @@ destination buffer. It is not a direct out-of-bounds write. Vendor source
 review should determine whether any non-crashing variant can copy adjacent
 process memory into a response buffer and leak it.
 
+## Reachability
+
+The bug is reachable from at least two distinct SAMC session states:
+
+1. **Fresh HELLO.** A newly-connected client sends a crafted first frame
+   whose plaintext opcode byte (offset 0) is `0x5e`. This is the
+   deterministic reproducer in `fuzzer/repro_prefixed_hello.py`.
+2. **Post-HELLO during ACK.** After a valid HELLO/SID exchange, a mutated
+   or truncated ACK-stage frame can land a plaintext whose opcode byte is
+   `0x5e`. The SID returned in the HELLO response often contains the byte
+   `0x5e` naturally (e.g. `sid_hex: 4e035e36` in one captured session),
+   so even small mutations to the ACK payload can cause the daemon to
+   re-dispatch into the `0x5e` handler.
+
+Both paths terminate in the same call site
+(`CodeMeterLin + 0x8f431d`) with the same signature. The point-fix at
+`+0x8f5460..+0x8f548c` (bounding `*(u32)(rbx+0xc)`) closes both paths
+because the vulnerability sits in the shared tag-`0x5e` parser rather
+than in any session-state-specific handler.
+
+For the static attribution of opcode `0x5e` (the `std::map<byte,
+Handler*>` at `+0x5e36e0` and the 65-entry dispatch table), see
+[`TIER_B.md`](TIER_B.md) §B-4 and
+[`disasm/opcode_dispatch_map.txt`](disasm/opcode_dispatch_map.txt).
+For the bug-class analysis across the rest of the binary (two other
+unbounded-memcpy sites exist but are *not* reachable from the SAMC
+surface), see [`BUG_CLASS_AUDIT.md`](BUG_CLASS_AUDIT.md).
+
+## Fuzz-Campaign Attestation
+
+A final fleet campaign was run to confirm that no other distinct bug
+reaches the same surface. Configuration
+(`output/farms/20260421_120217/launcher_config.json`):
+
+```
+farms:             8
+workers per farm:  10  (80 concurrent workers total)
+wall clock:        3600 s  (1 hour)
+modes:             mixed, hello, ack, big, rotate, mixed  (farm_00..farm_07)
+known signature:   CodeMeterLin+0x8f431d -> memcpy_8f431d_prefixed_hello
+```
+
+Result (`output/farms/20260421_120217/final_report.json`):
+
+```
+total crashes:     67
+new signatures:    0
+```
+
+Per-mode breakdown:
+
+| farm | mode   | runs | crashes | rate  |
+|-----:|--------|-----:|--------:|------:|
+| 00   | mixed  |   15 |      14 |  93%  |
+| 01   | hello  |    9 |       6 |  67%  |
+| 02   | ack    |   23 |      22 |  96%  |
+| 03   | big    |    5 |       0 |   0%  |
+| 04   | rotate |    7 |       2 |  29%  |
+| 05   | mixed  |   13 |      11 |  85%  |
+| 06   | mixed  |   12 |      10 |  83%  |
+| 07   | hello  |    7 |       2 |  29%  |
+| **Σ**| —      |  *91*|   **67**| *74%* |
+
+Two useful readings:
+
+- **BIG-mode immunity.** Post-session BIG-frame mutations (5 runs) produced
+  zero crashes. The vulnerability sits in HELLO-phase parsing, not in the
+  bulk-data path that follows a completed handshake.
+- **One bucket, no escapes.** 67 crashes across 5 distinct mutation
+  strategies all fell into the one known signature. No other exploitable
+  parser defect appeared on this attack surface within an hour of
+  80-worker fleet time, supporting the claim that the point-fix plus the
+  recommended helper-level systemic fix is sufficient for the SAMC
+  protocol surface.
+
 ## Suggested Fix
 
 At source level, reject malformed HELLO fields before they populate the parser
@@ -193,16 +268,23 @@ copy with a large length.
 ```text
 README.md                              this summary
 REPRODUCING.md                         deterministic reproduction recipe
+ROOT_CAUSE.md                          parser-state-level root cause
 NEXT_STEPS_PROCESS.md                  reduction process and completed result
 MULTI_INSTANCE_FUZZING.md              namespace-isolated multi-daemon fuzz-farm notes
 TRIAGE.md                              earlier core/disassembly triage notes
+TIER_B.md                              static analysis: %rdx origin, class, opcode 0x5e
+BUG_CLASS_AUDIT.md                     audit for sibling unbounded-memcpy sites
+FIX_GUIDANCE.md                        suggested source-level fix
 fuzzer/
   repro_prefixed_hello.py              deterministic one-packet crash reproducer
   samc_light_supervisor.py             high-throughput attribution harness
   samc_fuzz.py                         original stateful fuzzer
   samc_replay.py                       replay harness for saved plaintexts
   run_samc_fuzz_parallel.sh            original 16-worker launcher
-disasm/                                annotated crash-site disassembly
+disasm/
+  opcode_dispatch_map.txt              all 65 SAMC opcode -> handler entries
+  cross_core_register_comparison.txt   Tier C-7: rbx variance across 12 cores
+  (plus per-frame annotated disassembly)
 triage/                                historical stack traces and fuzz logs
 seeds/                                 captured canonical SAMC session plaintexts
 ```

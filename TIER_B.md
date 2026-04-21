@@ -242,3 +242,12 @@ the std::map described above.
 4. **Reproducibility**: **single-session, single-packet bug.** The
    deterministic reproducer is
    [`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py).
+5. **Reachability**: triggerable from two distinct session states —
+   fresh HELLO (the direct repro) and post-HELLO during ACK (a
+   mutated or truncated ACK payload whose first plaintext byte
+   becomes `0x5e`, often via an SID-echo that naturally contains
+   `0x5e`). Both paths converge on the same tag-`0x5e` parser class
+   and the same faulting call site. See `README.md` §
+   "Reachability" and "Fuzz-Campaign Attestation" for the dynamic
+   evidence (67 crashes across 5 mutation strategies, 0 new
+   signatures, 0 crashes in post-session BIG-frame mode).
