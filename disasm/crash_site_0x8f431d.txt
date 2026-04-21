@@ -1,0 +1,194 @@
+
+/usr/sbin/CodeMeterLin:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000008f4100 <.text+0x545da0>:
+  8f4100:	83 f8 02             	cmp    $0x2,%eax
+  8f4103:	0f 84 d3 07 00 00    	je     8f48dc <fwrite@plt+0x546584>
+  8f4109:	83 f8 01             	cmp    $0x1,%eax
+  8f410c:	0f 85 84 0a 00 00    	jne    8f4b96 <fwrite@plt+0x54683e>
+  8f4112:	bf a3 95 9f 9e       	mov    $0x9e9f95a3,%edi
+  8f4117:	49 89 e8             	mov    %rbp,%r8
+  8f411a:	e8 41 fc ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f411f:	e9 11 0c 00 00       	jmp    8f4d35 <fwrite@plt+0x5469dd>
+  8f4124:	4c 89 ef             	mov    %r13,%rdi
+  8f4127:	e8 e4 f9 ff ff       	call   8f3b10 <fwrite@plt+0x5457b8>
+  8f412c:	48 85 c0             	test   %rax,%rax
+  8f412f:	0f 84 c6 08 00 00    	je     8f49fb <fwrite@plt+0x5466a3>
+  8f4135:	48 89 c7             	mov    %rax,%rdi
+  8f4138:	48 89 c3             	mov    %rax,%rbx
+  8f413b:	e8 e0 f9 ff ff       	call   8f3b20 <fwrite@plt+0x5457c8>
+  8f4140:	89 c1                	mov    %eax,%ecx
+  8f4142:	48 89 d8             	mov    %rbx,%rax
+  8f4145:	f7 c1 00 00 40 00    	test   $0x400000,%ecx
+  8f414b:	0f 85 e6 0b 00 00    	jne    8f4d37 <fwrite@plt+0x5469df>
+  8f4151:	e9 c1 07 00 00       	jmp    8f4917 <fwrite@plt+0x5465bf>
+  8f4156:	44 89 ee             	mov    %r13d,%esi
+  8f4159:	bf 12 19 59 c8       	mov    $0xc8591912,%edi
+  8f415e:	4d 89 e0             	mov    %r12,%r8
+  8f4161:	e8 fa fb ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f4166:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
+  8f416d:	00 00 
+  8f416f:	48 3b 8c 24 10 01 00 	cmp    0x110(%rsp),%rcx
+  8f4176:	00 
+  8f4177:	0f 84 d1 0b 00 00    	je     8f4d4e <fwrite@plt+0x5469f6>
+  8f417d:	e9 95 0c 00 00       	jmp    8f4e17 <fwrite@plt+0x546abf>
+  8f4182:	4c 39 ed             	cmp    %r13,%rbp
+  8f4185:	0f 87 02 09 00 00    	ja     8f4a8d <fwrite@plt+0x546735>
+  8f418b:	48 85 ed             	test   %rbp,%rbp
+  8f418e:	0f 94 c0             	sete   %al
+  8f4191:	48 85 f6             	test   %rsi,%rsi
+  8f4194:	0f 94 c1             	sete   %cl
+  8f4197:	08 c1                	or     %al,%cl
+  8f4199:	0f 85 9d 01 00 00    	jne    8f433c <fwrite@plt+0x545fe4>
+  8f419f:	48 01 f5             	add    %rsi,%rbp
+  8f41a2:	bf d5 4d 7b 0d       	mov    $0xd7b4dd5,%edi
+  8f41a7:	48 89 ea             	mov    %rbp,%rdx
+  8f41aa:	48 89 f1             	mov    %rsi,%rcx
+  8f41ad:	4d 89 e0             	mov    %r12,%r8
+  8f41b0:	e8 ab fb ff ff       	call   8f3d60 <fwrite@plt+0x545a08>
+  8f41b5:	e9 42 0c 00 00       	jmp    8f4dfc <fwrite@plt+0x546aa4>
+  8f41ba:	ba cb 9b 63 ca       	mov    $0xca639bcb,%edx
+  8f41bf:	31 c9                	xor    %ecx,%ecx
+  8f41c1:	e8 9a 0c 00 00       	call   8f4e60 <fwrite@plt+0x546b08>
+  8f41c6:	48 89 eb             	mov    %rbp,%rbx
+  8f41c9:	4c 29 e3             	sub    %r12,%rbx
+  8f41cc:	80 3d 55 7a 7d 01 00 	cmpb   $0x0,0x17d7a55(%rip)        # 20cbc28 <_fini@@Base+0x891dec>
+  8f41d3:	0f 85 1d 01 00 00    	jne    8f42f6 <fwrite@plt+0x545f9e>
+  8f41d9:	4d 8b 75 00          	mov    0x0(%r13),%r14
+  8f41dd:	49 8b 45 10          	mov    0x10(%r13),%rax
+  8f41e1:	4c 29 f0             	sub    %r14,%rax
+  8f41e4:	48 39 c3             	cmp    %rax,%rbx
+  8f41e7:	0f 87 09 01 00 00    	ja     8f42f6 <fwrite@plt+0x545f9e>
+  8f41ed:	49 8b 45 08          	mov    0x8(%r13),%rax
+  8f41f1:	49 83 c5 08          	add    $0x8,%r13
+  8f41f5:	48 89 c2             	mov    %rax,%rdx
+  8f41f8:	4c 29 f2             	sub    %r14,%rdx
+  8f41fb:	48 39 da             	cmp    %rbx,%rdx
+  8f41fe:	0f 83 59 02 00 00    	jae    8f445d <fwrite@plt+0x546105>
+  8f4204:	4d 8d 3c 14          	lea    (%r12,%rdx,1),%r15
+  8f4208:	4c 39 f0             	cmp    %r14,%rax
+  8f420b:	74 0b                	je     8f4218 <fwrite@plt+0x545ec0>
+  8f420d:	4c 89 f7             	mov    %r14,%rdi
+  8f4210:	4c 89 e6             	mov    %r12,%rsi
+  8f4213:	e8 58 8c ab ff       	call   3ace70 <memmove@plt>
+  8f4218:	49 8b 5d 00          	mov    0x0(%r13),%rbx
+  8f421c:	4c 29 fd             	sub    %r15,%rbp
+  8f421f:	0f 84 7b 01 00 00    	je     8f43a0 <fwrite@plt+0x546048>
+  8f4225:	48 89 df             	mov    %rbx,%rdi
+  8f4228:	4c 89 fe             	mov    %r15,%rsi
+  8f422b:	48 89 ea             	mov    %rbp,%rdx
+  8f422e:	e8 3d 8c ab ff       	call   3ace70 <memmove@plt>
+  8f4233:	e9 68 01 00 00       	jmp    8f43a0 <fwrite@plt+0x546048>
+  8f4238:	48 89 6c 24 10       	mov    %rbp,0x10(%rsp)
+  8f423d:	ba cb 9b 63 ca       	mov    $0xca639bcb,%edx
+  8f4242:	31 c9                	xor    %ecx,%ecx
+  8f4244:	e8 17 0c 00 00       	call   8f4e60 <fwrite@plt+0x546b08>
+  8f4249:	48 8b 2b             	mov    (%rbx),%rbp
+  8f424c:	4c 8b 7b 08          	mov    0x8(%rbx),%r15
+  8f4250:	4c 39 fd             	cmp    %r15,%rbp
+  8f4253:	0f 84 53 01 00 00    	je     8f43ac <fwrite@plt+0x546054>
+  8f4259:	4c 89 64 24 18       	mov    %r12,0x18(%rsp)
+  8f425e:	f6 44 24 0c 20       	testb  $0x20,0xc(%rsp)
+  8f4263:	0f 84 ae 06 00 00    	je     8f4917 <fwrite@plt+0x5465bf>
+  8f4269:	49 8d 45 02          	lea    0x2(%r13),%rax
+  8f426d:	48 89 44 24 50       	mov    %rax,0x50(%rsp)
+  8f4272:	4d 8d 75 04          	lea    0x4(%r13),%r14
+  8f4276:	49 81 c5 8c 00 00 00 	add    $0x8c,%r13
+  8f427d:	48 8b 44 24 10       	mov    0x10(%rsp),%rax
+  8f4282:	4c 8d 40 04          	lea    0x4(%rax),%r8
+  8f4286:	e9 e0 0a 00 00       	jmp    8f4d6b <fwrite@plt+0x546a13>
+  8f428b:	f6 44 24 0c 40       	testb  $0x40,0xc(%rsp)
+  8f4290:	0f 85 9f 0a 00 00    	jne    8f4d35 <fwrite@plt+0x5469dd>
+  8f4296:	41 c7 45 78 00 00 00 	movl   $0x0,0x78(%r13)
+  8f429d:	00 
+  8f429e:	bf a8 00 00 00       	mov    $0xa8,%edi
+  8f42a3:	e8 78 f6 ff ff       	call   8f3920 <fwrite@plt+0x5455c8>
+  8f42a8:	49 89 c6             	mov    %rax,%r14
+  8f42ab:	e8 80 f6 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f42b0:	48 89 c3             	mov    %rax,%rbx
+  8f42b3:	e8 78 f6 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f42b8:	49 89 c7             	mov    %rax,%r15
+  8f42bb:	e8 70 f6 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f42c0:	49 89 c4             	mov    %rax,%r12
+  8f42c3:	e8 68 f6 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f42c8:	be e7 00 00 00       	mov    $0xe7,%esi
+  8f42cd:	4c 89 f7             	mov    %r14,%rdi
+  8f42d0:	48 89 da             	mov    %rbx,%rdx
+  8f42d3:	4c 89 f9             	mov    %r15,%rcx
+  8f42d6:	4d 89 e0             	mov    %r12,%r8
+  8f42d9:	49 89 c1             	mov    %rax,%r9
+  8f42dc:	e8 5f f6 ff ff       	call   8f3940 <fwrite@plt+0x5455e8>
+  8f42e1:	e9 f3 08 00 00       	jmp    8f4bd9 <fwrite@plt+0x546881>
+  8f42e6:	31 c0                	xor    %eax,%eax
+  8f42e8:	48 c7 44 24 38 00 00 	movq   $0x0,0x38(%rsp)
+  8f42ef:	00 00 
+  8f42f1:	e9 ae 03 00 00       	jmp    8f46a4 <fwrite@plt+0x54634c>
+  8f42f6:	48 85 db             	test   %rbx,%rbx
+  8f42f9:	0f 88 20 08 00 00    	js     8f4b1f <fwrite@plt+0x5467c7>
+  8f42ff:	48 89 df             	mov    %rbx,%rdi
+  8f4302:	e8 69 f8 ff ff       	call   8f3b70 <fwrite@plt+0x545818>
+  8f4307:	49 89 c6             	mov    %rax,%r14
+  8f430a:	4c 39 e5             	cmp    %r12,%rbp
+  8f430d:	74 0e                	je     8f431d <fwrite@plt+0x545fc5>
+  8f430f:	4c 89 f7             	mov    %r14,%rdi
+  8f4312:	4c 89 e6             	mov    %r12,%rsi
+  8f4315:	48 89 da             	mov    %rbx,%rdx
+  8f4318:	e8 e3 89 ab ff       	call   3acd00 <memcpy@plt>
+  8f431d:	4d 8d 65 10          	lea    0x10(%r13),%r12
+  8f4321:	4d 8d 7d 08          	lea    0x8(%r13),%r15
+  8f4325:	49 8b 7d 00          	mov    0x0(%r13),%rdi
+  8f4329:	48 85 ff             	test   %rdi,%rdi
+  8f432c:	74 4f                	je     8f437d <fwrite@plt+0x546025>
+  8f432e:	49 8b 34 24          	mov    (%r12),%rsi
+  8f4332:	48 29 fe             	sub    %rdi,%rsi
+  8f4335:	e8 a6 f7 ff ff       	call   8f3ae0 <fwrite@plt+0x545788>
+  8f433a:	eb 4c                	jmp    8f4388 <fwrite@plt+0x546030>
+  8f433c:	f6 44 24 0c 40       	testb  $0x40,0xc(%rsp)
+  8f4341:	0f 85 32 01 00 00    	jne    8f4479 <fwrite@plt+0x546121>
+  8f4347:	49 8b 04 24          	mov    (%r12),%rax
+  8f434b:	49 39 44 24 08       	cmp    %rax,0x8(%r12)
+  8f4350:	0f 84 a6 0a 00 00    	je     8f4dfc <fwrite@plt+0x546aa4>
+  8f4356:	c7 05 fc aa 64 01 c6 	movl   $0xc7bff9c6,0x164aafc(%rip)        # 1f3ee5c <_fini@@Base+0x705020>
+  8f435d:	f9 bf c7 
+  8f4360:	49 89 44 24 08       	mov    %rax,0x8(%r12)
+  8f4365:	e9 92 0a 00 00       	jmp    8f4dfc <fwrite@plt+0x546aa4>
+  8f436a:	4c 8d bc 24 80 00 00 	lea    0x80(%rsp),%r15
+  8f4371:	00 
+  8f4372:	4c 8d 74 24 78       	lea    0x78(%rsp),%r14
+  8f4377:	4d 89 fc             	mov    %r15,%r12
+  8f437a:	4c 89 eb             	mov    %r13,%rbx
+  8f437d:	f6 44 24 0c 20       	testb  $0x20,0xc(%rsp)
+  8f4382:	0f 85 4d 07 00 00    	jne    8f4ad5 <fwrite@plt+0x54677d>
+  8f4388:	4d 89 75 00          	mov    %r14,0x0(%r13)
+  8f438c:	4c 01 f3             	add    %r14,%rbx
+  8f438f:	49 89 1f             	mov    %rbx,(%r15)
+  8f4392:	49 89 1c 24          	mov    %rbx,(%r12)
+  8f4396:	e9 9a 09 00 00       	jmp    8f4d35 <fwrite@plt+0x5469dd>
+  8f439b:	4c 8d 6c 24 78       	lea    0x78(%rsp),%r13
+  8f43a0:	48 01 dd             	add    %rbx,%rbp
+  8f43a3:	49 89 6d 00          	mov    %rbp,0x0(%r13)
+  8f43a7:	e9 89 09 00 00       	jmp    8f4d35 <fwrite@plt+0x5469dd>
+  8f43ac:	f6 44 24 0c 40       	testb  $0x40,0xc(%rsp)
+  8f43b1:	0f 84 7e 09 00 00    	je     8f4d35 <fwrite@plt+0x5469dd>
+  8f43b7:	48 8b 05 8a ad 64 01 	mov    0x164ad8a(%rip),%rax        # 1f3f148 <_fini@@Base+0x70530c>
+  8f43be:	8b 0d 6c ad 64 01    	mov    0x164ad6c(%rip),%ecx        # 1f3f130 <_fini@@Base+0x7052f4>
+  8f43c4:	bd 52 9d 00 00       	mov    $0x9d52,%ebp
+  8f43c9:	29 dd                	sub    %ebx,%ebp
+  8f43cb:	29 e9                	sub    %ebp,%ecx
+  8f43cd:	48 63 c9             	movslq %ecx,%rcx
+  8f43d0:	48 01 c1             	add    %rax,%rcx
+  8f43d3:	bf a8 00 00 00       	mov    $0xa8,%edi
+  8f43d8:	be c3 d3 64 43       	mov    $0x4364d3c3,%esi
+  8f43dd:	ff d1                	call   *%rcx
+  8f43df:	49 89 c6             	mov    %rax,%r14
+  8f43e2:	48 8b 44 24 48       	mov    0x48(%rsp),%rax
+  8f43e7:	48 63 18             	movslq (%rax),%rbx
+  8f43ea:	e8 41 f5 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f43ef:	49 89 c7             	mov    %rax,%r15
+  8f43f2:	e8 39 f5 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f43f7:	49 89 c4             	mov    %rax,%r12
+  8f43fa:	e8 31 f5 ff ff       	call   8f3930 <fwrite@plt+0x5455d8>
+  8f43ff:	49                   	rex.WB
