@@ -1,14 +1,55 @@
 #!/usr/bin/env python3
-"""Lightweight 16-worker SAMC fuzz supervisor.
+"""Lightweight 16-worker SAMC fuzz orchestrator.
 
-This keeps the high-throughput behavior of ../ax_fuzz/tier1/samc_fuzz.py
-while fixing crash attribution:
+This is the "orchestrator" used to reduce the CodeMeterLin crash. It preserves
+the important behavior of the original high-throughput fuzzer
+(`../ax_fuzz/tier1/samc_fuzz.py`) while changing how crash attribution works.
 
-* strict CodeMeterLin PID detection via pgrep -x
-* raw-core detection in /var/tmp/cm_cores and systemd-coredump
-* one supervisor owns crash detection and stopping
-* workers keep an in-memory ring of the last N full session attempts
-* plaintexts and metadata are written only when workers stop
+What changed compared with the original parallel fuzzer:
+
+1. Crash detection moved out of workers and into one supervisor.
+   The old workers each checked daemon liveness every 10 iterations and all
+   tried to save/restart when one daemon died. That made crash files mostly
+   bystanders. Here, workers only fuzz. The supervisor watches the daemon and
+   stops everybody together.
+
+2. Daemon identity checks are stricter.
+   The old code used `pgrep -f "/usr/sbin/CodeMeterLin -f"`, which can match
+   command lines that merely contain that string. This script uses
+   `pgrep -x CodeMeterLin`, plus listener/service/core checks.
+
+3. Raw cores are part of the crash oracle.
+   Full cores on this host are written under `/var/tmp/cm_cores`; older
+   systemd-coredump files live under `/var/lib/systemd/coredump`. The
+   supervisor watches both. A new core after run start is enough to stop.
+
+4. Workers keep only an in-memory ring while fuzzing.
+   Writing every attempt was too slow and changed timing. Each worker stores
+   the last N attempts in RAM and writes them only when it exits. This keeps
+   throughput close to the original fuzzer.
+
+5. Post-crash connection-refused attempts are not allowed into the ring.
+   The first version of this orchestrator reproduced the crash, but every
+   worker then filled its last-100 ring with `Connection refused` attempts
+   while the core was being written. The current code appends only attempts
+   that actually sent at least one frame (`attempt["frames"]` is non-empty).
+
+Output layout:
+
+  <out-dir>/
+    run_config.json                 seeds, roles, baseline PID/core
+    summary.json                    supervisor result and worker counters
+    worker_00/
+      worker_summary.json           per-worker status counts
+      ring_manifest.jsonl           JSONL index of saved attempts
+      ring/iter_00004667/
+        attempt.json                metadata for one attempt
+        frame_0_plaintext.bin       plaintext sent for frame 0
+        frame_1_plaintext.bin       if that attempt reached ACK
+        frame_2_plaintext.bin       if that attempt reached 0x64
+
+This script is not meant to be a general-purpose fuzzing framework. It is a
+small crash-attribution wrapper for this specific SAMC reduction job.
 """
 
 from __future__ import annotations
@@ -38,6 +79,7 @@ STRATEGIES = [
 
 
 def load_samc(ax_fuzz: Path):
+    """Import the existing fuzzer module without copying its crypto helpers."""
     mod_path = ax_fuzz / "tier1" / "samc_fuzz.py"
     sys.path.insert(0, str(mod_path.parent))
     spec = importlib.util.spec_from_file_location("samc_fuzz", mod_path)
@@ -53,7 +95,14 @@ def sha256_hex(data: bytes) -> str:
 
 
 def mutate_with_meta(samc, plaintext: bytes, rng: random.Random) -> tuple[bytes, dict[str, Any]]:
-    """Same RNG call order and mutation semantics as ax_fuzz samc_fuzz.py."""
+    """Mutate one plaintext and return enough metadata to replay the choice.
+
+    The mutator intentionally mirrors the old fuzzer's RNG call order and
+    mutation semantics. That matters because we wanted the orchestrated run to
+    stay comparable to the run that originally found the bug. The only extra
+    work is recording metadata such as position, inserted bytes, and output
+    length.
+    """
     if not plaintext:
         n = rng.randint(4, 64)
         out = rng.randbytes(n)
@@ -110,6 +159,7 @@ def mutate_with_meta(samc, plaintext: bytes, rng: random.Random) -> tuple[bytes,
 
 
 def response_meta(samc, sock: socket.socket) -> tuple[dict[str, Any], bytes | None]:
+    """Receive one daemon response and keep only compact diagnostic metadata."""
     try:
         wire = samc.recv_one_wire_frame(sock, timeout=1.5)
     except (socket.timeout, ConnectionResetError, BrokenPipeError, OSError) as exc:
@@ -127,6 +177,18 @@ def response_meta(samc, sock: socket.socket) -> tuple[dict[str, Any], bytes | No
 
 def run_one(samc, host: str, port: int, target_frame: int,
             rng: random.Random, worker_id: int, iteration: int) -> tuple[str, dict[str, Any]]:
+    """Run one stateful SAMC session attempt.
+
+    A session attempt is:
+
+      HELLO
+      optional ACK
+      optional 0x64 request
+
+    depending on which frame is the target. The target frame is mutated before
+    encryption. The returned attempt object keeps plaintext bytes in memory so
+    `dump_ring()` can write them if the supervisor stops the run.
+    """
     sids: list[bytes] = []
     token = rng.randbytes(samc.HELLO_TOKEN_LEN)
     attempt: dict[str, Any] = {
@@ -213,6 +275,13 @@ def run_one(samc, host: str, port: int, target_frame: int,
 
 def dump_ring(worker_dir: Path, ring: collections.deque, counts: dict[str, int],
               reason: str, pid: int) -> None:
+    """Write one worker's in-memory ring to disk after stop/crash.
+
+    Plaintext bytes are written as separate `.bin` files so they can be fed to
+    replay scripts or inspected with `xxd`. The JSON metadata points at those
+    files and includes mutation details, response status, token, timestamps, and
+    frame index.
+    """
     worker_dir.mkdir(parents=True, exist_ok=True)
     ring_dir = worker_dir / "ring"
     ring_dir.mkdir(parents=True, exist_ok=True)
@@ -248,6 +317,7 @@ def dump_ring(worker_dir: Path, ring: collections.deque, counts: dict[str, int],
 
 def worker_main(config: dict[str, Any], worker_id: int, seed: int, role: int,
                 stop_event: mp.Event, counter) -> None:
+    """Worker loop: fuzz quickly, keep recent sent attempts, do not restart."""
     samc = load_samc(Path(config["ax_fuzz"]))
     rng = random.Random(seed)
     n_frames = len(samc.CAPTURED_SESSION_C2D)
@@ -281,6 +351,11 @@ def worker_main(config: dict[str, Any], worker_id: int, seed: int, role: int,
                     "mono_end_ns": time.monotonic_ns(),
                 }
             counts[status] = counts.get(status, 0) + 1
+            # Only attempts that sent at least one frame are useful for crash
+            # attribution. After a daemon crash, workers can loop through many
+            # fast `Connection refused` attempts before the supervisor notices
+            # the new core. Do not let those empty attempts evict the real
+            # pre-crash traffic from the ring.
             if attempt.get("frames"):
                 ring.append(attempt)
             counter.value = i + 1
@@ -293,6 +368,7 @@ def sh(args: list[str], timeout: float = 2.0) -> str:
 
 
 def codemeter_pid() -> int | None:
+    """Return the daemon PID using an exact process-name match."""
     try:
         out = sh(["pgrep", "-x", "CodeMeterLin"])
     except Exception:
@@ -309,6 +385,7 @@ def service_state() -> str:
 
 
 def newest_core() -> dict[str, Any] | None:
+    """Return the newest CodeMeter core from raw-core or systemd locations."""
     newest: tuple[int, Path] | None = None
     for root in (Path("/var/tmp/cm_cores"), Path("/var/lib/systemd/coredump")):
         if not root.exists():
@@ -328,6 +405,7 @@ def newest_core() -> dict[str, Any] | None:
 
 
 def listener_ready(port: int) -> bool:
+    """Check whether the CodeMeter TCP listener is accepting on `port`."""
     try:
         out = sh(["ss", "-tln", f"( sport = :{port} )"])
     except Exception:
@@ -336,6 +414,7 @@ def listener_ready(port: int) -> bool:
 
 
 def ensure_daemon(port: int) -> None:
+    """Start CodeMeter if needed and wait until PID and listener are visible."""
     if service_state() != "active":
         subprocess.run(["sudo", "systemctl", "start", "codemeter"], check=False, timeout=30)
     for _ in range(30):
@@ -346,6 +425,18 @@ def ensure_daemon(port: int) -> None:
 
 
 def roles_for(workers: int, mode: str) -> list[int]:
+    """Map worker IDs to fuzzing roles.
+
+    Role values are frame indexes:
+
+      -1 = rotate target frame by iteration
+       0 = mutate HELLO
+       1 = mutate ACK
+       2 = mutate 0x64
+
+    `mixed` matches the original 16-worker shape: rotate, HELLO, ACK, BIG,
+    repeated across the worker list.
+    """
     patterns = {
         "mixed": [-1, 0, 1, 2],
         "rotate": [-1],
@@ -358,6 +449,7 @@ def roles_for(workers: int, mode: str) -> list[int]:
 
 
 def supervisor(args: argparse.Namespace) -> int:
+    """Start workers, watch the daemon, stop on the first crash signal."""
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     ensure_daemon(args.port)
@@ -439,6 +531,9 @@ def supervisor(args: argparse.Namespace) -> int:
             listener_down = not listener_is_ready
             service_inactive = current_service_state != "active"
             workers_exited = all(not p.is_alive() for p in procs)
+            # Stop on the earliest reliable crash signal. A core may take a
+            # moment to finish writing, and systemd may still report `active`
+            # briefly, so use the union of PID/core/listener/service checks.
             if pid_changed or core_changed or listener_down or service_inactive:
                 result = {
                     "reason": "crash_or_restart",
@@ -501,7 +596,10 @@ def supervisor(args: argparse.Namespace) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="High-throughput SAMC fuzz orchestrator with crash attribution.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     ap.add_argument("--ax-fuzz", default="/home/avj/clones/ax_fuzz")
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--host", default="127.0.0.1")

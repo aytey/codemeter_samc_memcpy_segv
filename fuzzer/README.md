@@ -14,6 +14,12 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 | `samc_replay.py` | single-input replay harness (for crash triage) |
 | `run_samc_fuzz_parallel.sh` | launches N concurrent workers (default 16) |
 
+For the planned multi-daemon scale-out design, see
+[`../MULTI_INSTANCE_FUZZING.md`](../MULTI_INSTANCE_FUZZING.md). The short
+version: Linux namespaces can run multiple isolated `CodeMeterLin` instances on
+the same host, but each farm needs private `/tmp`, `/dev/shm`, config/state
+directories, IPC, and network namespaces.
+
 ## Prerequisites
 
 - `python3` ≥ 3.10 (uses `list[bytes]` type hints)
@@ -86,6 +92,48 @@ but centralizes crash detection in a supervisor. It detects raw cores in
 `/var/tmp/cm_cores`, uses `pgrep -x CodeMeterLin`, and dumps worker rings only
 after stop/crash so attribution is not lost to post-crash connection-refused
 attempts.
+
+## Lightweight Orchestrator Design
+
+`samc_light_supervisor.py` is the orchestrator used to reduce the crash. It is
+not a replacement protocol fuzzer; it is a thin wrapper around the original
+fuzzing behavior with better attribution.
+
+Changes from `run_samc_fuzz_parallel.sh` + `samc_fuzz.py`:
+
+| area | old behavior | orchestrator behavior |
+|---|---|---|
+| crash detection | each worker checks every 10 iterations | one supervisor polls PID/core/listener/service state |
+| PID matching | `pgrep -f` can match unrelated command lines | exact `pgrep -x CodeMeterLin` |
+| core detection | systemd-coredump path only | `/var/tmp/cm_cores` and systemd-coredump |
+| restart | workers race to restart after detection | supervisor stops workers; restart is left to the operator |
+| saved inputs | only the current worker's last mutation, often a bystander | each worker dumps an in-memory ring of recent sent sessions |
+| hot-path I/O | low, but attribution poor | still low; writes plaintexts only after stop/crash |
+
+The ring-buffer detail matters. The first version of the orchestrator
+successfully reproduced the crash, but while the raw core was being written the
+workers kept looping and their last-100 rings became only `Connection refused`
+attempts. The current version stores only attempts that sent at least one frame,
+so post-crash connection failures cannot evict the useful pre-crash traffic.
+
+Output layout:
+
+```text
+<out-dir>/
+  run_config.json
+  summary.json
+  worker_09/
+    worker_summary.json
+    ring_manifest.jsonl
+    ring/
+      iter_00004667/
+        attempt.json
+        frame_0_plaintext.bin
+```
+
+`attempt.json` records the worker ID, iteration, target frame, token, mutation
+metadata, send timestamps, response status, and paths to the plaintext frames.
+The plaintext `.bin` files are the artifacts to replay or inspect with `xxd`.
 
 ## Isolated Crash
 

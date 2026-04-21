@@ -194,6 +194,7 @@ copy with a large length.
 README.md                              this summary
 REPRODUCING.md                         deterministic reproduction recipe
 NEXT_STEPS_PROCESS.md                  reduction process and completed result
+MULTI_INSTANCE_FUZZING.md              namespace-isolated multi-daemon fuzz-farm notes
 TRIAGE.md                              earlier core/disassembly triage notes
 fuzzer/
   repro_prefixed_hello.py              deterministic one-packet crash reproducer
