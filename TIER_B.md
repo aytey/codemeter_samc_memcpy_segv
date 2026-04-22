@@ -196,13 +196,18 @@ opcode 0x5e  →  handler struct 0x01e88868
 2. The *class-instance tag* written at `this+0x29` during construction
    inside `0x874890`.
 
-This matches the on-wire reproducer in
-[`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py):
-the five-byte plaintext prefix `5e 35 5e d6 f2` is what makes the
-daemon route into the 0x5e handler — the appended "canonical HELLO"
-bytes become the payload that supplies the malicious u32 at offset
-`+0xc`. There is no dedicated "HELLO mutation"; it is a crafted SAMC
-frame with opcode `0x5e`.
+This matches the on-wire reproducers in
+[`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py) and
+[`fuzzer/repro_prefixed_ack_standalone.py`](fuzzer/repro_prefixed_ack_standalone.py):
+the first parser-visible plaintext byte is `0x5e`, which makes the daemon
+route into the `0x5e` handler. The appended canonical HELLO or ACK bytes become
+the payload that supplies the malicious u32 at offset `+0xc`. There is no
+dedicated "HELLO bug"; it is a crafted SAMC frame with opcode `0x5e`.
+
+The first deterministic reduction used the historical HELLO prefix
+`5e 35 5e d6 f2`. Later ECDH prefix fuzzing showed that the random-looking
+tail is not special: `5e 00 00 00 00 || HELLO` and a zero-tail prefixed ACK
+reach the same parser class and crash signature.
 
 ### Earlier (incorrect) hypothesis — why it was off
 
@@ -239,15 +244,14 @@ the std::map described above.
    payload size or `Server.ini`'s `MaxMessageLen` at the call site
    `+0x8f5460..+0x8f548c`. An extra safety net at the allocator
    `+0x8f3b70` (reject `> N MB`) would also catch any missed caller.
-4. **Reproducibility**: **single-session, single-packet bug.** The
-   deterministic reproducer is
-   [`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py).
+4. **Reproducibility**: the fresh-HELLO route is a single-packet repro in
+   [`fuzzer/repro_prefixed_hello.py`](fuzzer/repro_prefixed_hello.py). The
+   ACK route is a two-frame repro in
+   [`fuzzer/repro_prefixed_ack_standalone.py`](fuzzer/repro_prefixed_ack_standalone.py):
+   normal HELLO, extract SID, then prefixed ACK.
 5. **Reachability**: triggerable from two distinct session states —
-   fresh HELLO (the direct repro) and post-HELLO during ACK (a
-   mutated or truncated ACK payload whose first plaintext byte
-   becomes `0x5e`, often via an SID-echo that naturally contains
-   `0x5e`). Both paths converge on the same tag-`0x5e` parser class
-   and the same faulting call site. See `README.md` §
-   "Reachability" and "Fuzz-Campaign Attestation" for the dynamic
-   evidence (67 crashes across 5 mutation strategies, 0 new
-   signatures, 0 crashes in post-session BIG-frame mode).
+   fresh HELLO and post-HELLO ACK. Both paths converge on the same
+   tag-`0x5e` parser class and the same faulting call site. See
+   `README.md`, `REPRODUCING.md`, and `RESEARCH_LOG.md` for the dynamic
+   evidence, including the 1-hour namespace farm and 6-hour ECDH prefix
+   campaign.

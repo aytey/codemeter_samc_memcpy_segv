@@ -14,7 +14,7 @@ whole binary.
 | `frame04_virtual_call_nearby.txt`        | +0x8f3b90..+0x8f3c40 | The allocator helper `+0x8f3b70` and the vtable-slot-0 entry `+0x8f3c40` (class destructor). |
 | `frame05_probable_request_dispatcher.txt`| +0x876400..+0x8764a0 | Backtrace frame #5 at +0x87647e — a layer above the parser class. Likely the dispatcher that picked which class to construct for this samc command. |
 | `frame06_upper_handler.txt`              | +0x862700..+0x862760 | Backtrace frame #6 at +0x86271c. |
-| `frame07_samc_msg_dispatcher.txt`        | +0x805a80..+0x805b00 | Backtrace frame #7 at +0x805ab5 — plausibly the samc-opcode dispatcher. |
+| `frame07_samc_msg_dispatcher.txt`        | +0x805a80..+0x805b00 | Backtrace frame #7 at +0x805ab5, above the opcode-dispatch path. `TIER_B.md` later identifies the actual opcode map lookup at `+0x5e36e0`. |
 | `frame08_connection_worker.txt`          | +0x803860..+0x803900 | Backtrace frame #8 at +0x803884. |
 | `frame09_read_loop.txt`                  | +0x7fd8e0..+0x7fd960 | Backtrace frame #9 at +0x7fd921 — probable per-connection message-read loop. |
 

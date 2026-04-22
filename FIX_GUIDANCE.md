@@ -16,9 +16,9 @@ In the helper's tag-4 body those two are consumed as
 swapped for the tag-5 consumer, which ends up doing
 `memcpy(alloc(arg3), arg2, arg3)`.
 
-**From source**, the compiled code at `+0x8f548c` is likely in the
-function that parses one of the structured fields of the samc `0x64`
-(big) request. Review that function's call and:
+**From source**, the compiled code at `+0x8f548c` is in the parser reached by
+the SAMC opcode-`0x5e` handler. The current HELLO and ACK repros both route
+there. Review that function's call and:
 
 1. Confirm whether `arg3` is supposed to be a pointer or a size. The
    helper's body expects `arg3` = begin, but the caller is passing a
@@ -107,12 +107,16 @@ even without the source-level fix.
 Use the fuzzer in this package to regression-test:
 
 ```bash
-# with the fix in place, run the same 16-worker campaign that produced
-# the crash on the unfixed binary
-WORKERS=16 ITERATIONS=10000000 ./fuzzer/run_samc_fuzz_parallel.sh
+# direct current repros should no longer crash
+python3 fuzzer/repro_prefixed_hello.py
+python3 fuzzer/repro_prefixed_ack_standalone.py
+
+# then run the purpose-built prefix campaign long enough to catch regressions
+sudo ./fuzzer/run_ecdh_prefix_6h.sh
 ```
 
 Criterion: zero SEGV cores with `CodeMeterLin + 0x8f431d` as caller
-over a 24-hour run at 16 workers. (The unfixed binary averages one core
-every 4-5 minutes under that load, so 24 h is comfortably past the
-noise floor.)
+from the direct repros and from a long ECDH prefix campaign. The unfixed
+binary produced 360 classified `memcpy_8f431d_prefixed_hello` crashes in the
+2026-04-22 6-hour campaign, so even a shorter prefix regression run should
+give a clear signal.

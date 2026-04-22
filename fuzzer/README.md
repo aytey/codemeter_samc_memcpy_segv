@@ -1,7 +1,9 @@
-# Fuzzer used to find this bug
+# Fuzzers and reproducers
 
-Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
-`127.0.0.1:22350`; does not instrument or wrap the daemon in any way.
+Stateful SAMC and daemon-to-server fuzzing tools plus deterministic reproducers.
+Most tools talk to a **live** `CodeMeterLin`; they do not instrument or wrap
+the daemon in any way. See `../README.md` and `../RESEARCH_LOG.md` for the
+current crash story and campaign chronology.
 
 ## Files
 
@@ -9,7 +11,8 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 |---|---|
 | `repro_prefixed_hello.py` | deterministic one-packet reproducer for the isolated crash |
 | `repro_prefixed_hello_standalone.py` | same HELLO reproducer as a single file; no project-local imports or data files |
-| `repro_ack_0x5e.py` | ACK-side two-frame reproducer candidate: normal HELLO, then crafted opcode-`0x5e` ACK |
+| `repro_ack_0x5e.py` | ACK-side two-frame reproducer: normal HELLO, live SID extraction, then crafted opcode-`0x5e` ACK |
+| `repro_prefixed_ack_standalone.py` | standalone ACK-side reproducer: normal HELLO, live SID extraction, then zero-tail prefixed ACK over PSK/ECDH |
 | `samc_light_supervisor.py` | high-throughput 16-worker attribution harness with per-worker ring dumps |
 | `samc_fuzz.py` | main fuzzer loop; stateful session replay with per-iteration mutation |
 | `samc_session_data.py` | canonical cleartext plaintexts captured from a real testbench session |
@@ -49,7 +52,9 @@ python3 repro_prefixed_hello.py
 ```
 
 This intentionally crashes the daemon by sending a single valid encrypted
-SAMC HELLO whose cleartext is prefixed with `5e355ed6f2`.
+SAMC HELLO whose cleartext is prefixed with `5e00000000`. The older captured
+`5e355ed6f2` prefix reaches the same shifted layout and can still be selected
+with `--prefix`.
 
 For a non-loopback network-server target, the same reproducer now uses the
 ECDH-selected channel by default:
@@ -72,16 +77,30 @@ Use `--dry-run` to construct and print the packet summary without sending it.
 Like the import-based version, it automatically uses the ECDH-selected `0xa1`
 channel for non-loopback targets.
 
-ACK-side candidate reproducer:
+ACK-side reproducer:
 
 ```bash
 python3 repro_ack_0x5e.py
 ```
 
 This sends a normal fresh-token HELLO, extracts the returned SID, patches it
-into the canonical ACK, then prepends one of the captured opcode-`0x5e` ACK
-prefixes before sending the ACK. Use `--prefix 5e` or another hex prefix to
-test minimization candidates.
+into the canonical ACK, then prepends a zero-tail opcode-`0x5e` ACK prefix
+before sending the ACK. Use `--sample-prefix N` for the older captured
+random-tail prefixes, or `--prefix 5e` / another hex prefix to test
+minimization candidates. Like the HELLO repro, `--channel auto` uses PSK for
+loopback targets and ECDH for non-loopback targets.
+
+Standalone ACK-side version with no project-local imports:
+
+```bash
+python3 repro_prefixed_ack_standalone.py
+```
+
+This builds the canonical HELLO and ACK internally. It sends HELLO first,
+decrypts the daemon response to extract the live SID, then sends
+`5e0000000000000000000000000000 || 0b000000 || SID` as the second
+application frame. Like the standalone HELLO repro, `--channel auto` uses PSK
+for loopback targets and ECDH for non-loopback targets.
 
 Single instance:
 
@@ -176,7 +195,7 @@ sudo python3 samc_veth_farm_launcher.py \
 The `ecdh_prefix_*` modes keep the ECDH selector channel, length, CRC, HELLO
 token, and ACK session-id patching valid, then fuzz only the parser-visible
 prefix before canonical messages. This is designed to find dispatcher/field
-shift failures like the `5e355ed6f2 || HELLO` crash without relying on a random
+shift failures like the `5e00000000 || HELLO` crash without relying on a random
 insert to rediscover the exact five bytes. Use
 `--ecdh-prefix-include-known-every N` to inject the known prefix periodically as
 a regression canary during longer campaigns; leave it at `0` to avoid the known
@@ -281,7 +300,7 @@ The plaintext `.bin` files are the artifacts to replay or inspect with `xxd`.
 
 ## Isolated Crash
 
-The reduced trigger is a HELLO mutation:
+The original reduced trigger was a HELLO mutation:
 
 ```text
 insert bytes: 5e 35 5e d6 f2
@@ -289,14 +308,32 @@ insert pos:   0
 frame:        0 (HELLO)
 ```
 
+That historical prefix is no longer believed to be special. The current
+simplified HELLO trigger is:
+
+```text
+5e 00 00 00 00 || canonical HELLO
+```
+
 The shifted cleartext begins:
 
 ```text
-5e 35 5e d6 f2 0a 00 00 00 00 00 00 10 00 00 28
+5e 00 00 00 00 0a 00 00 00 00 00 00 10 00 00 28
 ```
 
 That causes the parser to cache `0x28000010` at `this + 0x68`; the value later
 reaches the `memcpy` length at `CodeMeterLin + 0x8f431d`.
+
+The same crash is also reachable through ACK after a normal HELLO/SID exchange:
+
+```text
+5e 00 00 00 00 00 00 00 00 00 00 00 00 00 00 || 0b 00 00 00 || SID
+```
+
+The 6-hour ECDH prefix campaign produced 360 classified crashes and no new
+signatures. Its main result was to confirm that both the HELLO and ACK routes
+are simpler zero-tail opcode-`0x5e` parser-shift cases, not special properties
+of the original random-tail bytes.
 
 ## Crypto used
 

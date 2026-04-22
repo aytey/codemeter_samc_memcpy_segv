@@ -17,6 +17,10 @@ Launcher exists and has run end-to-end (2026-04-21):
   [First 1-hour run: findings](#first-1-hour-run-findings) at the end of this
   document for what the run revealed about reachability of the known crash
   from ACK vs. `0x64` frames.
+- Follow-up ECDH prefix run: **8 farms × 8 workers × 6 hours, 1,398,462
+  attempts, 360 classified crashes, all in the same signature**. That run did
+  not find a new crash class, but it simplified the HELLO and ACK repros to
+  zero-tail opcode-`0x5e` prefixes. See `RESEARCH_LOG.md`.
 
 The rest of this document captures the design, the manual proof it was built
 from, and the detector fixes that were needed once the supervisor moved
@@ -207,7 +211,7 @@ both the daemon and the supervisor inside it.
 ## Seed and Mode Sharding
 
 If all farms run the same mixed mode, they may rediscover the known
-prefixed-HELLO crash. For finding more bugs, shard the work:
+opcode-`0x5e` memcpy crash. For finding more bugs, shard the work:
 
 ```text
 some farms: --mode hello
@@ -243,7 +247,7 @@ Known crash signature:
 ```text
 libc memcpy/memmove
 CodeMeterLin + 0x8f431d
-large copy length derived from malformed HELLO parser state
+large copy length derived from opcode-0x5e parser state
 ```
 
 For a known crash, preserve the farm output and optionally restart that farm
@@ -400,7 +404,7 @@ Per mode:
 | rotate | 2  | 5 | iteration-rotated target frame; bug reached only when rotation lands on a crashable frame |
 | big    | **0** | **5** | **`0x64` request mutation never reached `+0x8f431d` in ~2.5 M attempts** |
 
-What this tells us beyond the reduced prefixed-HELLO repro:
+What this tells us beyond the first reduced prefixed-HELLO repro:
 
 1. **The `+0x8f431d` memcpy is reachable from the ACK decoder as well as
    the HELLO decoder.** The ack-only farm crashed 22 times in 1 hour, all on
@@ -427,3 +431,32 @@ What this tells us beyond the reduced prefixed-HELLO repro:
    or skip the known-crash dispatch somehow) or run deliberately narrowed
    experiments such as `big`-only with a structural mutator.
 
+## Follow-up 6-hour ECDH prefix run
+
+The later veth-backed ECDH prefix campaign used
+`fuzzer/samc_ecdh_prefix_supervisor.py` and `fuzzer/samc_veth_farm_launcher.py`
+to fuzz only the parser-visible prefix before canonical HELLO and ACK messages.
+
+```text
+output root: /home/avj/clones/ax_fuzz/output/veth_farms/20260422_013945
+log:         /home/avj/clones/ax_fuzz/output/veth_prefix_6h_logs/run_20260422_013945.log
+farms:       8
+workers:     8 per farm
+modes:       ecdh_prefix_hello, ecdh_prefix_ack
+attempts:    1,398,462
+classified:  360 crashes
+new sigs:    0
+```
+
+Main result: no new crash class, but the known crash no longer depends on the
+original random-looking `5e355ed6f2` bytes. The preferred repro shapes are now:
+
+```text
+HELLO: 5e00000000 || canonical HELLO
+ACK:   5e0000000000000000000000000000 || canonical ACK
+```
+
+The campaign also produced repeated `opcode=0x22,prefix_len=2` no-response
+events. Those are tracked as a possible parser/no-response behavior, but not a
+confirmed distinct crash because the cores continued to classify into the
+opcode-`0x5e` memcpy bucket.

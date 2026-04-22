@@ -4,9 +4,11 @@ This document supersedes the "bug characterisation" section of
 [`README.md`](README.md) with analysis performed on a full-memory core
 (`coredump_filter=0xff`, 1.9 GB). Summary of what changed:
 
-- The length passed to memcpy is **not an attacker-supplied length
-  field** read from the packet. It is `source_end - source_begin`,
-  computed from a pair of pointers at `CodeMeterLin+0x8f41c6..0x8f41c9`.
+- The value passed to `memcpy` is computed as `source_end - source_begin` at
+  `CodeMeterLin+0x8f41c6..0x8f41c9`. Later static analysis in `TIER_B.md`
+  showed why this still becomes input-driven: the tag-4 recursion makes that
+  difference equal to the u32 loaded from the opcode-`0x5e` payload at
+  `*(rbx+0xc)`.
 - `source_begin` (`%r12`) is a valid heap pointer; `source_end` (`%rbp`)
   is **not in any mapped region** at crash time. The bug is that a pair
   of pointers describing a range is inconsistent — one valid, one stale
@@ -59,7 +61,9 @@ Verification of the key identity `%rbx == %rbp - %r12`:
 '0x612b09cb'
 ```
 
-i.e. `rbx` is the pointer subtraction, not an input field.
+i.e. `rbx` is the pointer subtraction at the crash site. `TIER_B.md` later
+traces why this pointer subtraction reduces to the input-derived u32 from
+`*(rbx+0xc)` at the external tag-4 caller.
 
 ## Call-site disassembly (compact)
 
@@ -262,19 +266,23 @@ for the full annotated disassembly of the dispatch function.
 
 ## Reproducibility
 
-Unchanged from initial report: statistically reproducible at 16 concurrent
-clients (~1 core per 500 K iterations, empirically ~1 per 4–5 min on a
-fresh daemon). 8 concurrent clients did not reproduce within a 30 min
-window in limited testing. See [`README.md`](README.md) and
-[`NEXT_STEPS_PROCESS.md`](NEXT_STEPS_PROCESS.md) §Phase 3.
+This section is historical core triage. Reproducibility has improved since the
+initial report: the crash now has deterministic direct repros for both
+`5e00000000 || HELLO` and a zero-tail prefixed ACK after a normal HELLO/SID
+exchange. See [`REPRODUCING.md`](REPRODUCING.md).
+
+The older statistical observation is still useful context: before the
+deterministic prefix shape was reduced, the crash appeared under high-worker
+random mutation campaigns and was hard to attribute because many workers saved
+post-crash bystanders.
 
 **Update to the original report's bug characterisation**: the earlier
-phrasing of "length field with only a signed-negative guard" was
-incomplete. The guard *is* only signed-negative, but the value being
-guarded is a pointer difference, not a raw input field. That distinction
-matters for fix direction — the remediation is not "add a MaxMessageLen
-bound on a length field" but "validate that `source_end` is in-range of
-the owning buffer before taking the difference."
+phrasing of "length field with only a signed-negative guard" was incomplete
+at this layer. The immediate guard is applied to a pointer difference, but the
+tag-4 to tag-5 recursion makes that difference equal to an input-derived u32
+loaded by the external caller. The fix should therefore validate both the
+source-buffer extent and the u32 length field before the helper call, with a
+final upper-bound check inside the helper.
 
 ## What Wibu can do without the fuzzer
 

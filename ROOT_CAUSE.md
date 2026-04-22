@@ -23,11 +23,9 @@ A samc frame arrives on TCP `127.0.0.1:22350`. It decrypts successfully
 its ciphertext and integrity are well-formed.
 
 The mutation that exposes the bug sits inside the **cleartext** payload,
-which is what the parser consumes after decryption. We don't yet know
-exactly which cleartext bytes map to the two swapped fields — that's
-the one remaining question — but we know they come from the cleartext
-because the bad values are observable in registers during parsing after
-decrypt has completed.
+which is what the parser consumes after decryption. The current repros force
+the first parser-visible byte to opcode `0x5e`; in that parser, the u32 at
+payload offset `+0xc` is forwarded as the dangerous copy length.
 
 ### Layer 2 — the parser state object
 
@@ -37,7 +35,7 @@ parsed request. We identified this class from:
 - its vtable at `CodeMeterLin + 0x88a4c0` (12 slots)
 - slot 0 = destructor at `+0x8f3c40`, whose libstdc++-idiomatic body
   destroys four `std::vector` members at offsets `+0x30`, `+0x48`,
-  `+0x88`, `+0x a0`.
+  `+0x88`, `+0xa0`.
 - two vtables installed mid-destructor (`0x88a4c0` then `0x1e8d230`)
   reveal a single-inheritance `Derived : Base` layout: the `+0x30` and
   `+0x48` vectors are `Base` members; the `+0x88` and `+0xa0` vectors
@@ -175,14 +173,21 @@ instantly which it is.
 
 ## What mutation produces the crash
 
-Any fuzz mutation of the cleartext payload that causes the parse to
-reach `+0x8f548c` with `arg3` carrying a bogus ~1.6 GB value is
-sufficient. Because that value is read from an input-derived field (we
-can see `*(rbx + 0x10)` read into `eax` just before the call, and
-similar loads likely set `arg3`), the bug is reachable from a single
-crafted request. The reason 16 concurrent workers find it ~4× faster
-than 8 is mutation throughput on the 712-byte `0x64` frame — not
-concurrent-access mechanics.
+Any fuzz mutation of the cleartext payload that routes into opcode `0x5e`
+and causes the parse to reach `+0x8f548c` with a large u32 at payload offset
+`+0xc` is sufficient. `TIER_B.md` traces `%rdx` at the call to
+`*(uint32_t *)(rbx+0xc)`, which is also cached at `this+0x68`.
+
+The current practical routes are:
+
+```text
+5e00000000 || canonical HELLO
+normal HELLO, then 5e0000000000000000000000000000 || canonical ACK
+```
+
+The original 16-worker fuzzing found the issue faster with more workers
+because of mutation throughput and crash-attribution noise, not because the
+bug requires concurrent sessions.
 
 ## Confidence and remaining unknowns
 
@@ -195,9 +200,8 @@ concurrent-access mechanics.
 | Crash path is tag-4 → tag-5 recursion | high | arithmetic reduction matches the core values exactly |
 | Outer caller is `+0x8f548c` | high | it is the only external tag-4 caller in the binary |
 | Arg-swap at `+0x8f548c` | **medium** | consistent with the value semantics but not proven from source |
-| Bug is single-session reachable | medium–high | no cross-session machinery appears in the call chain; concurrency scaling is O(mutation-rate), not O(pairs-of-sessions) |
-| Exact input byte → bad arg3 mapping | unknown | needs either source or longer reduction (see
-[`NEXT_STEPS_PROCESS.md`](NEXT_STEPS_PROCESS.md)) |
+| Bug is single-session reachable | high | deterministic HELLO repro is one application frame; ACK repro is a normal HELLO followed by one malformed ACK |
+| Exact input byte -> bad arg3 mapping | high | `TIER_B.md` traces `%rdx` at `+0x8f548c` to `*(uint32_t *)(rbx+0xc)` |
 
 ## See also
 
