@@ -989,6 +989,7 @@ def main() -> int:
                 **p,
                 "farm_root": str(p["farm_root"]),
                 "out_dir": str(p["out_dir"]),
+                "out_root": str(p["out_root"]),
                 "core_dir": str(p["core_dir"]),
             }
             for p in plan
