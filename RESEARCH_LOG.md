@@ -157,6 +157,42 @@ The ACK route is now captured by:
   internally, extracts the live SID, and sends the simplified zero-tail ACK
   prefix over PSK or ECDH.
 
+### Full-core revalidation and corrected cause
+
+The four local reproducers were rerun on 2026-04-22 with unlimited core size,
+`kernel.core_pattern=core.%e.%p`, and `coredump_filter=0xff` on the live
+`CodeMeterLin` process. Fresh cores were captured at:
+
+```text
+/var/tmp/cm_full_core_capture_20260422_090148/cores
+```
+
+All four reproducers crashed the daemon locally:
+
+| repro | apparent core size | `rbx` length at crash | interpretation |
+|---|---:|---:|---|
+| `fuzzer/repro_prefixed_hello.py` | 831M | `0x28000010` | HELLO bytes at `payload+0x0c` |
+| `fuzzer/repro_prefixed_hello_standalone.py` | 831M | `0x28000010` | same HELLO route |
+| `fuzzer/repro_ack_0x5e.py` | 368M | `0x0b000000` | ACK bytes at `payload+0x0c` |
+| `fuzzer/repro_prefixed_ack_standalone.py` | 368M | `0x0b000000` | same ACK route |
+
+The files are sparse, so each occupies about 62M on disk despite the larger
+apparent core size.
+
+This revalidation corrected the earlier root-cause wording. The crash is not
+best described as an argument-order swap. The opcode-`0x5e` parser passes a
+consistent `(begin, size)` pair to the helper:
+
+```text
+begin = payload + 0x14
+size  = *(uint32_t *)(payload + 0x0c)
+```
+
+The bug is that `size` is trusted without checking it against the remaining
+decrypted payload length. The helper allocates `size` bytes, then performs a
+source read of `size` bytes from `payload+0x14`; the read walks past the
+decoded input buffer and faults in libc `memcpy`/`memmove`.
+
 ## Open directions
 
 - Treat the opcode-`0x22` observations as a separate parser/no-response

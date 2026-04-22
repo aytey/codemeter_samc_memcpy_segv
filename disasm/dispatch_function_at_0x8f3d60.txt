@@ -58,7 +58,7 @@ Tag-4 body (composite; recurses into tag-5 after pointer arithmetic):
   8f419f:  add  %rsi, %rbp             ; ★ rbp = rbp + rsi  (compute end ptr)
   8f41a2:  mov  $0xd7b4dd5, %edi       ; tag = 0xd7b4dd5 → (& 0xf) == 5
   8f41a7:  mov  %rbp, %rdx             ; recursive arg3 = new end
-  8f41aa:  mov  %rsi, %rcx             ; recursive arg4 = rsi (the old size/offset)
+  8f41aa:  mov  %rsi, %rcx             ; recursive arg4 = rsi (begin pointer)
   8f41ad:  mov  %r12, %r8              ; recursive arg5 = r12 (outer's arg4)
   8f41b0:  call 8f3d60                 ; ★ RECURSE with tag=5
   8f41b5:  jmp  8f4dfc                 ; frame #2's "return addr" — this is the
@@ -93,42 +93,33 @@ saved, GDB's stack unwinder labels the recursion as a distinct frame.
 So the crash path is almost certainly:
 
   (some caller)
-    → call 0x8f3d60 with  (tag=4, rsi=SOME_SIZE, rdx=SOME_BEGIN,
+    → call 0x8f3d60 with  (tag=4, rsi=BEGIN, rdx=SIZE,
                             rcx=..., r8=SOME_LIMIT)
     → tag-4 body:
          assert rdx (=rbp) and rsi non-zero
          rbp += rsi        ;  end = begin + size
-         call 0x8f3d60 again with (tag=5, rdx=end, rcx=rsi, r8=begin)
+         call 0x8f3d60 again with (tag=5, rdx=end, rcx=begin, r8=...)
     → tag-5 body:
-         rbx = rbp - r12   ;  = (begin + size) - size = begin
+         rbx = rbp - r12   ;  = (begin + size) - begin = size
          js <if neg>;  alloc(rbx); memcpy(dst, src=r12, len=rbx)
-         ★ if `rbp` (the computed end pointer) is in unmapped memory,
+         ★ if size is larger than the remaining source buffer,
            memcpy walks off the source mapping and SEGVs.
 
 Concretely in the core:
 
-  rbx (length)  = 0x612b09cb           ; this is the OUTER arg3 (=begin_ptr
-                                       ;  treated as length by the recursive
-                                       ;  tag-5 call)
-  r12 (src)     = 0x7ff0ac00db74       ; this is the OUTER arg2 (=size value
-                                       ;  treated as pointer by the recursive
-                                       ;  tag-5 call)
-  rbp (src end) = 0x7ff10d2be53f       ; = r12 + rbx  (outer's begin+size)
+  rbx (length)  = 0x612b09cb           ; this is the OUTER arg3 (=size)
+  r12 (src)     = 0x7ff0ac00db74       ; this is the OUTER arg2 (=begin)
+  rbp (src end) = 0x7ff10d2be53f       ; = r12 + rbx  (begin+size)
 
 Which means the OUTER caller of 0x8f3d60 (at tag=4) supplied:
 
-  arg2 (size-ish) = 0x7ff0ac00db74     ; a heap-looking value (~140 TB)
-                                       ;  — clearly a POINTER value landing
-                                       ;  in a size slot
-  arg3 (begin-ish) = 0x612b09cb        ; a ~1.6 GB number in a pointer slot
-                                       ;  — clearly a SIZE value landing
-                                       ;  in a pointer slot
+  arg2 (begin) = 0x7ff0ac00db74        ; source pointer
+  arg3 (size)  = 0x612b09cb            ; copy length
 
-This is the signature of a **(pointer, size) pair passed in the wrong
-argument order** to a dispatch helper that was designed to accept
-(begin-ptr, size).  Either the outer caller swapped the two, or the
-fields in the structure it's pulling from are inconsistent with how
-they're being consumed here.
+The fresh deterministic HELLO/ACK cores supersede the earlier argument-order
+hypothesis. This is a consistent (begin, size) call. The bug is that size is
+loaded from opcode-0x5e payload offset +0x0c and is not checked against the
+remaining bytes available from begin.
 
 ========================================================================
 Candidate bug locations
@@ -155,10 +146,7 @@ candidate for the outer frame of the crashing recursion. It's reached
 from whichever function built the r15-object whose vtable is at
 +0x88a4c0 (the C++ class with four std::vector members).
 
-The exact input field that ends up as arg2/arg3 at that call is a
-straightforward source-code lookup for Wibu; without source it would
-require either:
-  (a) stepping backward from 0x8f548c's arg setup, tracing where its
-      %rdx/%rsi come from, or
-  (b) tightening the fuzzer to attribute which input bytes map to the
-      bad arg values (the plan in ../NEXT_STEPS_PROCESS.md).
+The exact input field is now known from the caller immediately before
+0x8f548c: %rdx is loaded from *(uint32_t *)(rbx+0xc), and %rsi is
+rbx+0x14. Wibu should validate that u32 length against the decoded
+payload extent before this call.

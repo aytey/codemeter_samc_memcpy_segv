@@ -1,18 +1,21 @@
 # TRIAGE — what the core dump reveals about the bug
 
-This document supersedes the "bug characterisation" section of
-[`README.md`](README.md) with analysis performed on a full-memory core
-(`coredump_filter=0xff`, 1.9 GB). Summary of what changed:
+This document records the core-dump analysis behind the root-cause write-up.
+The first pass used the historical full-memory core
+`core.CodeMeterLin.477656.1776755891` (`coredump_filter=0xff`, 1.9 GB).
+Later deterministic HELLO/ACK cores from
+`/var/tmp/cm_full_core_capture_20260422_090148/cores` confirm the same call
+site with simpler, fully understood lengths. Summary:
 
 - The value passed to `memcpy` is computed as `source_end - source_begin` at
   `CodeMeterLin+0x8f41c6..0x8f41c9`. Later static analysis in `TIER_B.md`
   showed why this still becomes input-driven: the tag-4 recursion makes that
   difference equal to the u32 loaded from the opcode-`0x5e` payload at
   `*(rbx+0xc)`.
-- `source_begin` (`%r12`) is a valid heap pointer; `source_end` (`%rbp`)
-  is **not in any mapped region** at crash time. The bug is that a pair
-  of pointers describing a range is inconsistent — one valid, one stale
-  or corrupt.
+- `source_begin` (`%r12`) is a valid heap pointer and `source_end` (`%rbp`)
+  is `source_begin + attacker_controlled_length`. In crashing cases,
+  `source_end` is outside the decoded input buffer and may be outside mapped
+  memory entirely.
 - The only guard on the subtraction result before allocation + memcpy is
   `js <negative_path>`. Any positive value, however large, proceeds.
 - The code at `CodeMeterLin+0x8f3c40` — the vtable-slot-0 function of
@@ -27,7 +30,7 @@ for the annotated disassembly of the call site, and
 [`disasm/vtable_slot0_destructor_at_0x8f3c40.txt`](disasm/vtable_slot0_destructor_at_0x8f3c40.txt)
 for the class destructor.
 
-## Crash core state
+## Historical crash core state
 
 From `core.CodeMeterLin.477656.1776755891`. Registers at SIGSEGV:
 
@@ -64,6 +67,14 @@ Verification of the key identity `%rbx == %rbp - %r12`:
 i.e. `rbx` is the pointer subtraction at the crash site. `TIER_B.md` later
 traces why this pointer subtraction reduces to the input-derived u32 from
 `*(rbx+0xc)` at the external tag-4 caller.
+
+The more recent deterministic repro cores show the same formula with simpler
+values:
+
+| route | payload word at `+0x0c` | `rbx` at crash |
+|---|---:|---:|
+| `5e00000000 || HELLO` | `0x28000010` | `0x28000010` |
+| prefixed ACK | `0x0b000000` | `0x0b000000` |
 
 ## Call-site disassembly (compact)
 
@@ -156,9 +167,9 @@ branch runs:
 
 So **`%rbp` and `%r12` are the 3rd and 4th function arguments**, provided
 by the caller. The tag-5 path computes `rbx = rbp - r12` — the
-"serialize the bytes between these two pointers" operation. The tag-4
-path does `rbp += rsi` and **recursively calls 0x8f3d60 with tag=5**,
-passing the new rbp (= old_rbp + rsi) as arg3 and the old rsi as arg4.
+"copy the bytes between these two pointers" operation. The tag-4 path does
+`rbp += rsi` and **recursively calls 0x8f3d60 with tag=5**, passing the new
+rbp (= old_rbp + rsi) as arg3 and the old rsi as arg4.
 
 That recursion is the crash path in our core. The backtrace's "frame #2"
 at `+0x8f41b5` is the return site of the recursive self-call, not a
@@ -167,41 +178,43 @@ distinct frame).
 
 ### What that recursion implies for the register state at crash
 
-Let `P` = outer caller's arg3 and `S` = outer caller's arg2. Then:
+Let `B` = outer caller's arg2 (`begin`) and `N` = outer caller's arg3
+(`size`). Then:
 
 ```
-outer body:       rbp := P, r12 := <outer arg4>, rsi := S
-                  rbp += rsi              =>  rbp' = P + S
-                  recurse(tag=5, rdx=rbp'=P+S, rcx=S, r8=<outer r12>)
+outer body:       rbp := N, r12 := <outer arg4>, rsi := B
+                  rbp += rsi              =>  rbp' = N + B
+                  recurse(tag=5, rdx=rbp'=B+N, rcx=B, r8=<outer r12>)
 
-recursion body:   r12 := S,        rbp := P + S
-                  rbx := rbp - r12 = P                     ← length
-                  memcpy(alloc(P), src=r12=S, len=P)       ← SEGV
+recursion body:   r12 := B,        rbp := B + N
+                  rbx := rbp - r12 = N                     ← length
+                  memcpy(alloc(N), src=r12=B, len=N)       ← SEGV
 ```
 
 So the memcpy is effectively:
 
 ```
-memcpy(alloc(P), src = (caller's arg2 value), len = P)
+memcpy(alloc(N), src = begin, len = N)
 ```
 
-where `P` is caller's *arg3* treated as a length, and `arg2` is treated
-as a source pointer.
+where `N` is caller's *arg3* treated as a length, and `arg2` is treated as a
+source pointer. The fresh deterministic cores show that this convention is
+consistent: the bug is not an argument swap, but that `N` is taken from
+untrusted input without checking the remaining source-buffer extent.
 
 ### The concrete values in the core
 
 ```
-rbx (length, memcpy) = P = 0x612b09cb        ; ~1.6 GB
-r12 (src,    memcpy) = S = 0x7ff0ac00db74    ; inside a real heap mapping
-rbp (src end impl.) = P+S = 0x7ff10d2be53f   ; in a non-accessed gap
+rbx (length, memcpy) = N = 0x612b09cb        ; ~1.6 GB
+r12 (src,    memcpy) = B = 0x7ff0ac00db74    ; inside a real heap mapping
+rbp (src end impl.) = B+N = 0x7ff10d2be53f   ; in a non-accessed gap
 ```
 
 Matching these back to the outer caller: the **caller passed arg2 =
-0x7ff0ac00db74 and arg3 = 0x612b09cb**. The first is clearly a pointer
-value (user-space heap range); the second is clearly a size value (~1.6
-GB). **They're in swapped positions** — the caller passed `(size,
-pointer)` to a helper that expects `(pointer, size)`, or equivalently
-pulled them from a structure whose layout the caller has wrong.
+0x7ff0ac00db74 and arg3 = 0x612b09cb**. The first is a source pointer, the
+second is a size value. The helper then copies that many bytes from that
+source. The flaw is that the size is attacker-controlled and not bounded by
+the actual number of bytes available from the source buffer.
 
 ## Most likely buggy caller
 
@@ -226,6 +239,12 @@ tag-4, which is the only route to the crashing tag-5 recursion. Its
 argument setup immediately before the call is:
 
 ```
+ 8f5452:  mov  0x4(%rbx), %eax         ; eax = *(rbx + 0x4)
+ 8f5455:  mov  %eax, 0x60(%r15)
+ 8f5459:  mov  0x8(%rbx), %eax         ; eax = *(rbx + 0x8)
+ 8f545c:  mov  %eax, 0x64(%r15)
+ 8f5460:  mov  0xc(%rbx), %edx         ; edx = length from *(rbx + 0xc)
+ 8f5463:  mov  %edx, 0x68(%r15)
  8f5467:  mov  0x10(%rbx), %eax        ; eax = *(rbx + 0x10) — a u32 from input
  8f546a:  lea  0x6c(%r15), %r12
  8f546e:  mov  %eax, 0x6c(%r15)        ; store u32 at r15+0x6c
@@ -236,11 +255,9 @@ argument setup immediately before the call is:
  8f548c:  call 0x8f3d60
 ```
 
-Here `%rbx` is clearly an input-buffer pointer (caller does `*(rbx+0x10)`
-etc.), and `%r15` is the target object. The 3rd arg (`%rdx`) is not set
-in this snippet — it's whatever the caller left in `%rdx` from earlier,
-or was loaded a few instructions before. That's where the bad value
-originates.
+Here `%rbx` is clearly an input-buffer pointer, and `%r15` is the target
+object. The 3rd arg (`%rdx`) is set directly from
+`*(uint32_t *)(rbx+0xc)`. That is the bad value.
 
 ## Recommended focus for Wibu
 
@@ -250,11 +267,10 @@ identified:
 1. Locate the function whose compiled entry point ends up near
    `+0x8f5400` and whose body performs `lea 0x14(%rbx), %rsi; call
    0x8f3d60` at tag=4.
-2. Identify where `%rdx` / `%rsi` come from just before that call — most
-   likely a pair of fields in the `*rbx`-pointed input structure.
-3. Add a bound: either enforce `size < MaxMessageLen` at that source
-   structure's parse site, or validate the (begin, size) pair before
-   passing to `0x8f3d60`.
+2. Treat `*(uint32_t *)(rbx+0xc)` as the variable byte-range length and
+   `rbx+0x14` as the byte-range start.
+3. Reject the frame if `length > remaining_payload_bytes_after_0x14`.
+   Also enforce a protocol maximum such as `MaxMessageLen`.
 
 The existing flag tested at `+0x8f41cc` (the global bool that currently
 only controls a fast/slow selector for the in-place-vs-grow path) is
@@ -289,10 +305,9 @@ final upper-bound check inside the helper.
 1. Build a debug or symbol-equipped `CodeMeterLin` and load the core,
    the function at `+0x8f3c40`/`+0x87647e`/`+0x8f41b5` will be named
    straight away.
-2. Audit the caller (frame #2) of the pointer-subtraction at
-   `+0x8f41c6`: what produces `%rbp` and `%r12`? That's the field-level
-   root cause.
+2. Audit the opcode-`0x5e` parser around `+0x8f5460`: the u32 at
+   `payload+0x0c` is the field-level root cause.
 3. Add an invariant that `source_end >= source_begin` and
-   `source_end ≤ <some known upper bound of the backing allocation>`
-   before the subtraction. Ideally at the place where `%rbp` is loaded;
-   alternatively a hard `rbx ≤ MaxMessageLen` gate at `+0x8f42f6`.
+   `source_end <= decoded_payload_end` before the subtraction. Ideally this
+   happens at the parser call site; alternatively add a hard
+   `rbx <= MaxMessageLen` gate at `+0x8f42f6` as a final safety net.

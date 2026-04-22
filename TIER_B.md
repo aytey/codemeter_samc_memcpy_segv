@@ -40,9 +40,11 @@ Between `0x8f5460` and `0x8f548c`, **nothing writes `%rdx`**. So at call
 time, `%rdx` (= dispatch function's `%rbp` = arg3) is exactly the 4-byte
 integer at `*rbx+0xc`, zero-extended.
 
-In our core, that value was `0x612b09cb`. The dispatch function's
-tag-4 → tag-5 recursion turns it into the memcpy length — so that 4-byte
-field of the input buffer is **the bug trigger**.
+In the historical core, that value was `0x612b09cb`. In the current simplified
+repro cores it is `0x28000010` for the HELLO route and `0x0b000000` for the
+ACK route. The dispatch function's tag-4 to tag-5 recursion turns this field
+into the memcpy length, so that 4-byte field of the input buffer is **the bug
+trigger**.
 
 ### The input-buffer structure (`*rbx` layout)
 

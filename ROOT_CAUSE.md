@@ -1,213 +1,250 @@
-# ROOT_CAUSE — end-to-end narrative of the bug
+# ROOT_CAUSE - opcode 0x5e unchecked length
 
-A single walkthrough from "attacker sends a samc packet" to "daemon
-SIGSEGV inside libc memcpy," consolidating what [`TRIAGE.md`](TRIAGE.md)
-and the annotated disassembly show. Intended as the quickest way in for
-anyone reading this repo cold.
+This is the current end-to-end explanation for the confirmed
+`CodeMeterLin+0x8f431d` SAMC crash. It supersedes the earlier
+"argument swap" interpretation: the fresh full-core runs show a simpler bug.
+The helper is being called with a consistent `(begin, size)` pair, but the
+`size` comes directly from attacker-controlled decrypted payload bytes and is
+not checked against the number of bytes actually present.
 
 ## One-sentence version
 
-A helper at `CodeMeterLin + 0x8f3d60`, invoked during samc-request
-parsing, accepts a `(begin, size)` pair and internally reduces it to a
-`memcpy` of `size` bytes from `begin` — but one of its callers supplies
-those two fields in **swapped positions**, so the memcpy tries to copy
-`≈ 1.6 GB` starting from an address that only has `≈ 10 MB` of mapped
-memory after it, and SEGVs.
+The SAMC opcode `0x5e` parser copies a u32 from decrypted payload offset
+`+0x0c`, treats it as the length of a variable byte range beginning at
+payload offset `+0x14`, then reaches a shared helper that allocates that many
+bytes and calls `memcpy(dst, payload + 0x14, length)` without first verifying
+that the decrypted payload contains `0x14 + length` bytes.
 
-## The five layers
+## Confirmed routes into the same bug
 
-### Layer 1 — the wire
+Both practical repro families route into opcode `0x5e` and the same
+`memcpy` call site. They only differ in which canonical protocol body gets
+shifted under the `0x5e` parser's fixed fields.
 
-A samc frame arrives on TCP `127.0.0.1:22350`. It decrypts successfully
-(correct key-derivation from `time(NULL)`, valid CRC tail MAC), meaning
-its ciphertext and integrity are well-formed.
-
-The mutation that exposes the bug sits inside the **cleartext** payload,
-which is what the parser consumes after decryption. The current repros force
-the first parser-visible byte to opcode `0x5e`; in that parser, the u32 at
-payload offset `+0xc` is forwarded as the dangerous copy length.
-
-### Layer 2 — the parser state object
-
-The daemon constructs an instance of a **C++ class** to hold the
-parsed request. We identified this class from:
-
-- its vtable at `CodeMeterLin + 0x88a4c0` (12 slots)
-- slot 0 = destructor at `+0x8f3c40`, whose libstdc++-idiomatic body
-  destroys four `std::vector` members at offsets `+0x30`, `+0x48`,
-  `+0x88`, `+0xa0`.
-- two vtables installed mid-destructor (`0x88a4c0` then `0x1e8d230`)
-  reveal a single-inheritance `Derived : Base` layout: the `+0x30` and
-  `+0x48` vectors are `Base` members; the `+0x88` and `+0xa0` vectors
-  are `Derived` members.
-
-Class layout (reconstructed from the dtor + the live core):
-
-```
-+0x00   vtable pointer  (= CodeMeterLin + 0x88a4c0 at crash)
-+0x08   scalar, low32 == -1 sentinel
-+0x10   scalar  (zero at crash)
-+0x18   scalar, high32 == -1 sentinel
-+0x20   scalar  (zero at crash)
-+0x28   scalar  (0x5e00 = 24064 at crash)
-+0x30   std::vector  (Base member)  {begin, finish, end_of_storage}
-+0x48   std::vector  (Base member)
-+0x60   scalar  (0x7f33b89f927c4608 at crash — hash/nonce-looking)
-+0x68   scalar  (0x0000000b612b09cb at crash — the cached bad length)
-+0x70   scalar  (zero)
-+0x78   scalar  (zero)
-+0x80   scalar  (zero)
-+0x88   std::vector  (Derived member)
-+0xa0   std::vector  (Derived member)
-+0xb8   end of class
-```
-
-At crash time all four vectors are **empty** (begin = finish = end =
-NULL). Several scalars, including the bad length at `+0x68`, have
-already been populated. The parser is mid-way through filling the
-object when the crash happens.
-
-### Layer 3 — the dispatch helper at `0x8f3d60`
-
-This function is called many times during parsing. Low 4 bits of the
-1st argument select a branch:
-
-| tag | branch | purpose (inferred) |
+| route | parser-visible plaintext shape | bad length at `+0x0c` |
 |---|---|---|
-| 0 – 3 | `+0x8f3e12` | primitive-ish |
-| 4 | `+0x8f4182` | composite: `rbp += rsi`, then recurse tag=5 |
-| 5 | `+0x8f41ba` | raw byte range: `rbx = rbp - r12; alloc+memcpy` |
-| 6 | fall-through | — |
-| 7 + | `+0x8f3ef7` | alternate |
+| Prefixed HELLO | `5e00000000 || canonical HELLO` | `0x28000010` |
+| Prefixed ACK | `5e0000000000000000000000000000 || canonical ACK` | `0x0b000000` |
 
-The tag-5 body is the crash site.
+The older HELLO prefix `5e355ed6f2` was the first deterministic reduced
+trigger. It is provenance, not a special value. The zero-tail prefixes reach
+the same class and the same crash.
 
-```
- 8f41c6:  mov  %rbp, %rbx
- 8f41c9:  sub  %r12, %rbx              ; length = rbp - r12
- 8f41cc:  cmpb $0, 0x17d7a55(%rip)     ; global fast/slow selector
- 8f41d3:  jne  8f42f6                   ; take GROW path
- …
- 8f42f6:  test %rbx, %rbx
- 8f42f9:  js   8f4b1f                   ; ONLY sanity check on length
- 8f42ff:  mov  %rbx, %rdi
- 8f4302:  call 8f3b70                   ; alloc(length)
- 8f4307:  mov  %rax, %r14
- …
- 8f430f:  mov  %r14, %rdi
- 8f4312:  mov  %r12, %rsi
- 8f4315:  mov  %rbx, %rdx
- 8f4318:  call 3acd00 <memcpy@plt>      ; ★ SIGSEGV
-```
+## Layer 1 - wire and decrypt
 
-That `js` is the sole guard between "arbitrary pointer subtraction" and
-"allocate + memcpy that many bytes from that source pointer". Anything
-non-negative passes.
+A client sends a valid SAMC application frame to TCP port `22350`. The frame
+is encrypted and authenticated correctly for the selected channel, either the
+local PSK channel or the ECDH-selected channel used for non-loopback targets.
 
-### Layer 4 — the tag-4 → tag-5 recursion
+After decryption, the parser-visible application plaintext starts with byte
+`0x5e`. This is the important routing property. The crash is not a HELLO-only
+or ACK-only bug; HELLO and ACK are two convenient bodies whose bytes can be
+placed under the opcode-`0x5e` parser.
 
-The tag-4 branch does this:
+## Layer 2 - opcode dispatch
 
-```
- 8f4182:  cmp  %r13, %rbp                ; rbp ≤ limit (arg5)
- 8f4185:  ja   8f4a8d
- 8f418b:  test %rbp, %rbp; sete %al       ; rbp != 0
- 8f4191:  test %rsi, %rsi; sete %cl       ; rsi != 0
- 8f4199:  jne  8f433c                     ; either zero → bail
- 8f419f:  add  %rsi, %rbp                 ; rbp = rbp + rsi
- 8f41a2:  mov  $0xd7b4dd5, %edi           ; tag & 0xf = 5
- 8f41a7:  mov  %rbp, %rdx                 ; recursive arg3 = new end
- 8f41aa:  mov  %rsi, %rcx                 ; recursive arg4 = old rsi
- 8f41ad:  mov  %r12, %r8                  ; recursive arg5 = old r12
- 8f41b0:  call 8f3d60                     ; recurse
- 8f41b5:  jmp  8f4dfc
-```
+Static analysis in [`TIER_B.md`](TIER_B.md) identifies the opcode dispatcher
+as the map lookup at `CodeMeterLin+0x5e36e0`. The entry for opcode `0x5e`
+routes to handler thunk `CodeMeterLin+0x862700`, which leads to construction
+and parsing of the tag-`0x5e` request object.
 
-If we name the outer call's interesting args `P = outer_arg3` and
-`S = outer_arg2`, the recursion's registers when it reaches the tag-5
-body become:
-
-```
-recursion.rbp  =  outer_arg3 + outer_arg2  =  P + S
-recursion.r12  =                outer_arg2 =  S
-recursion.rbx  =  rbp - r12                =  (P + S) - S  =  P
-```
-
-So **the memcpy runs with `len = outer_arg3` and `src = outer_arg2`**.
-
-That's by design if the outer caller passes `(size, begin)` —
-`arg2 = S = size`, `arg3 = P = begin` — and means
-`memcpy(alloc(size), begin, size)`. Clean.
-
-### Layer 5 — the outer caller at `0x8f548c` and the swap
-
-Exactly one external call site passes tag = 4:
-
-```
- 8f5467:  mov  0x10(%rbx), %eax        ; read u32 field from *(rbx + 0x10)
- 8f546a:  lea  0x6c(%r15), %r12        ; r12 = &r15[0x6c]
- 8f546e:  mov  %eax, 0x6c(%r15)        ; r15[0x6c] := u32 (caching?)
- 8f5472:  lea  0x88(%r15), %rcx        ; arg4 = &r15[0x88]
- 8f5479:  lea  0x14(%rbx), %rsi        ; arg2 = &rbx[0x14]
- 8f547d:  movabs $0x7fffffffffffffff, %r8   ; arg5 = LLONG_MAX
- 8f5487:  mov  $0x2ff3ff34, %edi       ; tag & 0xf = 4
- 8f548c:  call 0x8f3d60
-                                       ; arg3 = (rdx) — set earlier in caller
-```
-
-In our core: at the moment of the crash, `outer_arg2 = S = 0x7ff0ac00db74`
-(a valid user-space heap pointer, exactly the shape of `&rbx[0x14]`), and
-`outer_arg3 = P = 0x612b09cb` (~1.63 GB — a size value).
-
-The code above is consistent with **the caller treating `arg2` as a
-source pointer (`&rbx[0x14]`) and `arg3` as a size**. But the helper's
-tag-4 body does `rbp += rsi` and then a tag-5 memcpy with
-`len = rbp - r12 = rbp_outer = outer_arg3`. So to work correctly it
-needs **`arg2` to be the size and `arg3` to be the begin pointer** —
-the reverse.
-
-Either the caller is passing them in the wrong slots, or the helper's
-convention for tag-4 differs from the other tags and this caller
-happens to get the opposite variant. From source Wibu can tell
-instantly which it is.
-
-## What mutation produces the crash
-
-Any fuzz mutation of the cleartext payload that routes into opcode `0x5e`
-and causes the parse to reach `+0x8f548c` with a large u32 at payload offset
-`+0xc` is sufficient. `TIER_B.md` traces `%rdx` at the call to
-`*(uint32_t *)(rbx+0xc)`, which is also cached at `this+0x68`.
-
-The current practical routes are:
+The relevant backtrace is stable across the HELLO and ACK repros:
 
 ```text
-5e00000000 || canonical HELLO
-normal HELLO, then 5e0000000000000000000000000000 || canonical ACK
+libc memcpy/memmove
+CodeMeterLin+0x8f431d
+CodeMeterLin+0x8f41b5
+CodeMeterLin+0x8f5491
+CodeMeterLin+0x8f3c36
+CodeMeterLin+0x87647e
+CodeMeterLin+0x86271c
+CodeMeterLin+0x805ab5
 ```
 
-The original 16-worker fuzzing found the issue faster with more workers
-because of mutation throughput and crash-attribution noise, not because the
-bug requires concurrent sessions.
+## Layer 3 - opcode 0x5e body parse
 
-## Confidence and remaining unknowns
+The parser for this object treats the decrypted opcode-`0x5e` payload as a
+fixed header followed by a variable byte range. The critical call site is the
+only external tag-4 caller of the shared helper:
+
+```text
+8f5452:  mov  0x4(%rbx), %eax         ; payload + 0x04
+8f5455:  mov  %eax, 0x60(%r15)
+8f5459:  mov  0x8(%rbx), %eax         ; payload + 0x08
+8f545c:  mov  %eax, 0x64(%r15)
+8f5460:  mov  0xc(%rbx), %edx         ; payload + 0x0c = byte-range length
+8f5463:  mov  %edx, 0x68(%r15)
+8f5467:  mov  0x10(%rbx), %eax        ; payload + 0x10
+8f546e:  mov  %eax, 0x6c(%r15)
+8f5472:  lea  0x88(%r15), %rcx        ; destination vector/member
+8f5479:  lea  0x14(%rbx), %rsi        ; source begin = payload + 0x14
+8f547d:  movabs $0x7fffffffffffffff, %r8
+8f5487:  mov  $0x2ff3ff34, %edi       ; tag 4
+8f548c:  call 0x8f3d60
+```
+
+Between the load at `+0x8f5460` and the call at `+0x8f548c`, `%rdx` is not
+overwritten. Therefore the helper's size argument is exactly:
+
+```c
+uint32_t length = *(uint32_t *)(payload + 0x0c);
+uint8_t *begin = payload + 0x14;
+```
+
+The missing check is:
+
+```c
+if (decrypted_payload_len < 0x14 ||
+    length > decrypted_payload_len - 0x14) {
+    reject_frame();
+}
+```
+
+## Layer 4 - shared helper behavior
+
+The shared helper at `CodeMeterLin+0x8f3d60` is a small tag-dispatched
+copy/parse helper. The opcode-`0x5e` parser enters it through tag 4, which
+recurses into tag 5.
+
+With:
+
+```text
+arg2 = begin = payload + 0x14
+arg3 = size  = *(uint32_t *)(payload + 0x0c)
+```
+
+the tag-4 body computes:
+
+```text
+end = begin + size
+```
+
+and then recurses into the tag-5 raw-range copy path. At the tag-5 crash site:
+
+```text
+rbx = end - begin = size
+r12 = begin
+```
+
+The GROW path has only a signed-negative check before allocation and copy:
+
+```text
+8f42f6:  test %rbx, %rbx
+8f42f9:  js   8f4b1f                  ; only rejects negative lengths
+8f42ff:  mov  %rbx, %rdi
+8f4302:  call 8f3b70                  ; allocate length bytes
+8f4307:  mov  %rax, %r14
+8f430f:  mov  %r14, %rdi              ; dst
+8f4312:  mov  %r12, %rsi              ; src = payload + 0x14
+8f4315:  mov  %rbx, %rdx              ; len
+8f4318:  call memcpy@plt              ; SIGSEGV inside libc
+8f431d:  ...                          ; observed return address
+```
+
+So the immediate primitive is:
+
+```c
+dst = alloc(length);
+memcpy(dst, payload + 0x14, length);
+```
+
+where `length` is an unchecked u32 from `payload + 0x0c`.
+
+## Fresh full-core evidence
+
+Fresh cores were captured on 2026-04-22 with:
+
+```text
+kernel.core_pattern = core.%e.%p
+LimitCORE = infinity
+coredump_filter = 0xff
+```
+
+The raw cores are sparse files under:
+
+```text
+/var/tmp/cm_full_core_capture_20260422_090148/cores
+```
+
+| repro | apparent size | disk blocks | `rbx` length at crash |
+|---|---:|---:|---:|
+| `repro_prefixed_hello.py` | 831M | 62M | `0x28000010` |
+| `repro_prefixed_hello_standalone.py` | 831M | 62M | `0x28000010` |
+| `repro_ack_0x5e.py` | 368M | 62M | `0x0b000000` |
+| `repro_prefixed_ack_standalone.py` | 368M | 62M | `0x0b000000` |
+
+The HELLO parser buffer in the core begins:
+
+```text
+payload+0x00: 0x0000005e
+payload+0x04: 0x00000a00
+payload+0x08: 0x00000000
+payload+0x0c: 0x28000010   ; copied to object +0x68, then used as length
+```
+
+The ACK parser buffer begins:
+
+```text
+payload+0x00: 0x0000005e
+payload+0x04: 0x00000000
+payload+0x08: 0x00000000
+payload+0x0c: 0x0b000000   ; copied to object +0x68, then used as length
+payload+0x10: 0x10000000
+```
+
+For both families, GDB shows the same fault shape:
+
+```text
+#0 libc __memmove_evex_unaligned_erms
+#1 CodeMeterLin+0x8f431d
+```
+
+The destination allocation succeeds. The crash occurs while reading from the
+source side of the copy. In the fresh HELLO and ACK cores, `memcpy` copied
+about `0x1c030` bytes from adjacent readable heap before the source pointer
+entered an unmapped/no-access region and faulted. That makes the demonstrated
+impact a remote daemon crash/DoS. It is an out-of-bounds read into an internal
+destination buffer; no information disclosure has been demonstrated.
+
+## What the two variants mean
+
+The HELLO and ACK variants are not separate root causes. They are two routes
+through different session states into the same opcode-`0x5e` parser:
+
+- HELLO route: one application frame; the shifted canonical HELLO contributes
+  `10 00 00 28` at offset `+0x0c`, interpreted as little-endian
+  `0x28000010`.
+- ACK route: normal HELLO first, live SID extracted, then a prefixed ACK; the
+  shifted canonical ACK contributes `00 00 00 0b` at offset `+0x0c`,
+  interpreted as little-endian `0x0b000000`.
+
+The different bad lengths explain the different apparent core sizes. The
+stack and vulnerable copy path are the same.
+
+## What is not proven
+
+The six-hour ECDH prefix campaign produced apparent `opcode=0x22,
+prefix_len=2` no-response events near crashes, but those have not produced a
+confirmed distinct core/signature. The confirmed evidence still points to the
+opcode-`0x5e` parser and `CodeMeterLin+0x8f431d`.
+
+## Confidence
 
 | claim | confidence | evidence |
 |---|---|---|
-| SIGSEGV site is reached via `memcpy@plt` from `+0x8f4318` | certain | 10/10 cores, matching disasm |
-| `rbx = rbp - r12` is the length formula | certain | disassembly at `+0x8f41c6`, verified by `rbp-r12==rbx` in core |
-| `rbp` is not in any mapped region at crash | certain | proc-mappings check in core |
-| Containing function is `+0x8f3d60` with tag-based dispatch | certain | prologue at `+0x8f3d60`, branch structure |
-| Crash path is tag-4 → tag-5 recursion | high | arithmetic reduction matches the core values exactly |
-| Outer caller is `+0x8f548c` | high | it is the only external tag-4 caller in the binary |
-| Arg-swap at `+0x8f548c` | **medium** | consistent with the value semantics but not proven from source |
-| Bug is single-session reachable | high | deterministic HELLO repro is one application frame; ACK repro is a normal HELLO followed by one malformed ACK |
-| Exact input byte -> bad arg3 mapping | high | `TIER_B.md` traces `%rdx` at `+0x8f548c` to `*(uint32_t *)(rbx+0xc)` |
+| SIGSEGV is inside libc memcpy/memmove with return at `+0x8f431d` | certain | all reproduced HELLO and ACK cores |
+| Opcode byte `0x5e` selects the vulnerable parser | high | opcode map in `TIER_B.md`, repro plaintexts |
+| `payload+0x0c` is loaded into `%edx` and cached at object `+0x68` | certain | disassembly at `+0x8f5460..+0x8f5463`, fresh cores |
+| The helper copies from `payload+0x14` for that unchecked length | certain | disassembly at `+0x8f5479`, tag-4/tag-5 helper, fresh registers |
+| The fault is a source out-of-bounds read after successful allocation | high | destination allocation returned; faulting `rsi` walks past readable source mapping |
+| HELLO and ACK are two variants of the same crash class | high | same stack, same helper, same field flow, different controlled lengths |
+| Opcode `0x22` is a separate crash | unproven | no confirmed isolated core/signature |
 
 ## See also
 
-- [`TRIAGE.md`](TRIAGE.md) for the mechanical register/stack analysis
-- [`disasm/dispatch_function_at_0x8f3d60.txt`](disasm/dispatch_function_at_0x8f3d60.txt)
-  for the full annotated disassembly of the dispatch helper
-- [`disasm/memcpy_call_site_annotated.txt`](disasm/memcpy_call_site_annotated.txt)
-  for the crash-site disassembly annotated with the register meanings
-- [`FIX_GUIDANCE.md`](FIX_GUIDANCE.md) for recommended remediation layers
+- [`REPRODUCING.md`](REPRODUCING.md) for the current repro procedures.
+- [`TRIAGE.md`](TRIAGE.md) for core-register details and historical triage.
+- [`TIER_B.md`](TIER_B.md) for static opcode-dispatch and field-origin
+  analysis.
+- [`FIX_GUIDANCE.md`](FIX_GUIDANCE.md) for source-level remediation.
+- [`RESEARCH_LOG.md`](RESEARCH_LOG.md) for campaign chronology.

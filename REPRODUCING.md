@@ -205,11 +205,26 @@ rbx = large copy length
 For the default HELLO repro:
   parser-visible word at cleartext +0x0c = 0x28000010
   parser object this+0x68 = 0x28000010
+
+For the default ACK repro:
+  parser-visible word at cleartext +0x0c = 0x0b000000
+  parser object this+0x68 = 0x0b000000
 ```
 
 The ACK route converges on the same stack/signature, but the parser-visible
 payload before the canonical ACK is shorter and session-dependent because the
 SID is extracted live from the HELLO response.
+
+The 2026-04-22 full-core rerun captured sparse ELF cores for all four
+reproducers under:
+
+```text
+/var/tmp/cm_full_core_capture_20260422_090148/cores
+```
+
+Those cores confirm that the HELLO and ACK routes differ only in the bad
+length value (`0x28000010` vs `0x0b000000`); both use the same opcode-`0x5e`
+parser and the same unchecked copy path.
 
 ## Historical Attribution Run
 

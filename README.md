@@ -112,6 +112,12 @@ Observed deterministic cores show a source over-read: destination allocation
 succeeds, but `memcpy` walks beyond the readable source mapping. The core and
 disassembly evidence is in `TRIAGE.md`, `ROOT_CAUSE.md`, and `TIER_B.md`.
 
+The 2026-04-22 full-core rerun also corrected an earlier working hypothesis:
+the confirmed bug is not an argument-order swap at the helper call. The
+opcode-`0x5e` parser passes `begin = payload+0x14` and
+`size = *(uint32_t *)(payload+0x0c)` consistently; the missing check is that
+`size` must fit within the remaining decrypted payload bytes.
+
 ## Campaign Findings
 
 The research history is documented in `RESEARCH_LOG.md`. Key campaign results:
@@ -174,4 +180,5 @@ contain process memory. Useful local artifacts referenced by the docs include:
 /home/avj/clones/ax_fuzz/output/light_supervisor_mixed2_20260421_103043
 /home/avj/clones/ax_fuzz/output/farms/20260421_120217
 /home/avj/clones/ax_fuzz/output/veth_farms/20260422_013945
+/var/tmp/cm_full_core_capture_20260422_090148/cores
 ```

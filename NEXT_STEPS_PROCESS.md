@@ -67,9 +67,11 @@ This document describes a practical process for reducing the current
 concurrent SAMC fuzzing crash into a more reproducible triage case.
 
 The goal is not necessarily to find a one-packet reproducer. Based on the
-available core state, the crash looks state-dependent: a valid source pointer
-is paired with a bogus end pointer, producing a huge copy length and an
-out-of-bounds source read in `memcpy`.
+available core state, the crash looked state-dependent: a valid source pointer
+was paired with a bogus end pointer, producing a huge copy length and an
+out-of-bounds source read in `memcpy`. Later deterministic cores clarified
+that the bogus end pointer is `source + unchecked_length`, where the length is
+the opcode-`0x5e` payload u32 at offset `+0x0c`.
 
 ## Current Crash Signature
 
@@ -96,8 +98,9 @@ fault address:         0x7ff0aca48ba4
 following reservation: 0x7ff0aca48000 - 0x7ff0b0000000  no access
 ```
 
-This strongly suggests an inconsistent range or stale container state rather
-than a straightforward destination overflow.
+This is not a destination overflow. The current interpretation is an
+unchecked source range: `payload+0x14` is copied for the attacker-controlled
+length stored at `payload+0x0c`.
 
 ## Phase 1: Fix Crash Attribution
 

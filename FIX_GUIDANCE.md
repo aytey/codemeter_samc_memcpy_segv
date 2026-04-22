@@ -5,31 +5,42 @@ minimum; layers 3 and 4 are defensive.
 
 ## Layer 1 — fix the caller at `CodeMeterLin + 0x8f548c`
 
-This is the root cause. At this call site the 3rd arg (`%rdx`, which
-the helper puts into `%rbp`) carries a ~1.6 GB value in the observed
-crash — almost certainly an attacker-controlled length field read from
-the incoming samc message. The 2nd arg (`%rsi`) is
-`&rbx[0x14]` — a pointer into the input buffer.
+This is the root cause. At this call site, the opcode-`0x5e` parser reads
+four u32 fields from the decrypted payload, caches them in the parser object,
+then passes a variable byte range to the shared helper:
 
-In the helper's tag-4 body those two are consumed as
-`(begin = arg3, size = arg2)` and then recursed with `(size, begin)`
-swapped for the tag-5 consumer, which ends up doing
-`memcpy(alloc(arg3), arg2, arg3)`.
+```text
+8f5460:  mov  0xc(%rbx), %edx         ; length = *(u32 *)(payload + 0x0c)
+8f5463:  mov  %edx, 0x68(%r15)        ; cache at object +0x68
+8f5479:  lea  0x14(%rbx), %rsi        ; begin = payload + 0x14
+8f548c:  call 0x8f3d60                ; helper copies begin,length
+```
 
-**From source**, the compiled code at `+0x8f548c` is in the parser reached by
-the SAMC opcode-`0x5e` handler. The current HELLO and ACK repros both route
-there. Review that function's call and:
+The fresh cores show this is not an argument-order bug. The helper convention
+is effectively `(begin, size)`, and the call uses it that way. The bug is that
+`size` is copied directly from `payload+0x0c` and is not checked against the
+remaining decrypted payload bytes before the helper reaches:
 
-1. Confirm whether `arg3` is supposed to be a pointer or a size. The
-   helper's body expects `arg3` = begin, but the caller is passing a
-   size value there.
-2. Fix the argument order, or read from the correct field of the input
-   structure, so the (begin, size) pair reaches the helper matching
-   its convention.
-3. Add a `size <= MaxMessageLen` (or a tighter per-field bound) check
-   before the call. `Server.ini`'s `MaxMessageLen` default is
-   `67_108_864` (64 MB); nothing that can be meaningfully parsed out of
-   a single samc frame should exceed that.
+```c
+memcpy(alloc(size), payload + 0x14, size);
+```
+
+**From source**, locate the parser reached by the SAMC opcode-`0x5e` handler
+and add bounds before the call:
+
+```c
+uint32_t size = load_le32(payload + 0x0c);
+size_t data_off = 0x14;
+
+if (payload_len < data_off || size > payload_len - data_off) {
+    reject_frame();
+}
+```
+
+Also enforce a protocol-level maximum such as `MaxMessageLen` or a tighter
+per-field limit. `Server.ini`'s `MaxMessageLen` default is `67_108_864`
+(64 MB); the confirmed HELLO length `0x28000010` and ACK length `0x0b000000`
+are both far beyond any valid body present in these frames.
 
 ## Layer 2 — bound `%rbx` in the dispatch helper's tag-5 GROW path
 
@@ -65,10 +76,10 @@ if (rbx < 0 || rbx > server.ini.MaxMessageLen) {
 ## Layer 3 — validate the `rbp += rsi` in the tag-4 body
 
 At `+0x8f419f` the tag-4 branch does `rbp += rsi` unconditionally after
-only checking that each is individually non-zero. A caller that passes
-a well-formed pointer for `rbp` and a bogus-but-positive size in `rsi`
-(or vice-versa) produces an `rbp` that no longer points anywhere real,
-which is exactly the input the tag-5 recursion then copies from.
+only checking that each is individually non-zero. In the confirmed crash,
+those values are `begin` and `size`, so the add forms `end = begin + size`.
+A bogus-but-positive size produces an end pointer far beyond the decoded input
+buffer, which is exactly the range tag 5 then copies.
 
 Possible hardening:
 
