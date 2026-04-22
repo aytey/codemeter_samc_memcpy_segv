@@ -21,6 +21,8 @@ Stateful samc-protocol fuzzer in Python. Talks to a **live** CodeMeterLin on
 | `samc_veth_farm_launcher.py` | local multi-daemon farm where fuzz traffic reaches each daemon over a veth address, not loopback |
 | `samc_veth_target_init.sh` | target-only namespace init used by `samc_veth_farm_launcher.py` |
 | `samc_ecdh_prefix_supervisor.py` | ECDH-channel prefix/dispatcher fuzzer for HELLO and ACK parser-shift bugs |
+| `samc_ds_supervisor.py` | daemon→server protocol fuzzer (0x0021/0x0511/0x0031/0x00f1 sub=0x5a,0x69) for veth farm targets |
+| `run_confirm_candidate.sh` | single-worker confirmation run for one (mode, opcode, prefix_len) candidate |
 
 For the multi-daemon scale-out design and what the first 1-hour 8×10 run
 revealed, see [`../MULTI_INSTANCE_FUZZING.md`](../MULTI_INSTANCE_FUZZING.md).
@@ -179,6 +181,33 @@ insert to rediscover the exact five bytes. Use
 `--ecdh-prefix-include-known-every N` to inject the known prefix periodically as
 a regression canary during longer campaigns; leave it at `0` to avoid the known
 crash shadowing new signatures.
+
+Daemon-to-server protocol coverage (all five message kinds):
+
+```bash
+sudo python3 samc_veth_farm_launcher.py \
+  --farms 4 \
+  --workers-per-farm 4 \
+  --modes ds_mixed \
+  --wall-clock 900 \
+  --timeout 900
+```
+
+The `ds_*` modes speak the full ECDH+daemon→server protocol sequence against
+each veth-backed daemon, fuzzing one of five record types per iteration:
+
+| mode | fuzz target | prior setup |
+|---|---|---|
+| `ds_auth0021` | 32B auth record | ECDH only |
+| `ds_init0511` | 1296B init record (template-based) | ECDH + fixed auth |
+| `ds_query0031` | 48B query record | ECDH + fixed auth + fixed init |
+| `ds_cmd00f1_5a` | 240B sub=0x5a SEED-query | ECDH + auth + init + 3 queries + re-auth |
+| `ds_cmd00f1_69` | 240B sub=0x69 SEED-exchange | full 0x5a sequence + re-auth + 2 queries |
+| `ds_mixed` | weighted blend of all above | — |
+
+Requires `--ds-helper-dir` pointing to a directory with `cm_direct_client_v7.py`
+and `200_sessions/cmd_0511_template.bin` (defaults to
+`/home/avj/clones/ax_decrypt/009/research_scripts`).
 
 ## What it does per iteration
 
