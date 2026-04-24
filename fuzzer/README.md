@@ -23,6 +23,9 @@ current crash story and campaign chronology.
 | `run_samc_fuzz_parallel.sh` | launches N concurrent workers (default 16) |
 | `fuzz_farm_launcher.py` | host-side driver for multi-farm namespaced fuzzing with crash-signature bucketing and auto-restart |
 | `fuzz_farm_namespace_init.sh` | PID-1 init script each farm's namespace runs; mounts, starts daemon, execs supervisor |
+| `cm_afl_netns_init.sh` | PID-1 init for one namespaced AFL/QEMU network-faithful worker |
+| `cm_afl_netns_launcher.py` | multi-worker namespace launcher for the network-faithful `net_*` AFL/QEMU modes |
+| `run_cm_afl_netns_weekend.sh` | 18-worker weekend wrapper for the recommended `net_*` modes |
 | `remote_cm_fuzz_launcher.py` | remote daemon-to-server protocol fuzzer with SSH-based target crash monitoring |
 | `samc_veth_farm_launcher.py` | local multi-daemon farm where fuzz traffic reaches each daemon over a veth address, not loopback |
 | `samc_veth_target_init.sh` | target-only namespace init used by `samc_veth_farm_launcher.py` |
@@ -92,6 +95,76 @@ To add a secondary worker to an existing mode:
 ```bash
 bash scripts/start_cm_afl_native_qemu.sh 7f9060 /path/to/out/7f9060 S 7f9060_s1
 ```
+
+## Network-Faithful AFL++/QEMU
+
+The direct-call native triplet above is useful for hot-path discovery, but it
+fuzzes post-parse heap state. The newer `net_*` modes pivot back to the same
+property the original `0x5e` harness had: the AFL testcase is the decrypted
+request body that will be sent to `CodeMeterLin`.
+
+Main files:
+
+- `preload/cm_afl_harness.c`
+- `preload/cm_afl_net_assets.h`
+- `scripts/build_cm_afl_net_assets.py`
+- `scripts/build_cm_afl_net_corpus.py`
+- `scripts/rebuild_cm_afl_net_assets.sh`
+- `scripts/run_cm_afl_net_showmap.sh`
+- `scripts/start_cm_afl_net_qemu.sh`
+- `fuzzer/cm_afl_netns_init.sh`
+- `fuzzer/cm_afl_netns_launcher.py`
+- `fuzzer/run_cm_afl_netns_weekend.sh`
+
+Validated modes:
+
+- `net_get_servers`
+- `net_access`
+- `net_access2`
+- `net_version`
+- `net_info_system`
+- `net_info_version`
+
+Quick `afl-showmap` proof:
+
+```bash
+bash scripts/run_cm_afl_net_showmap.sh net_get_servers
+bash scripts/run_cm_afl_net_showmap.sh net_info_version
+bash scripts/run_cm_afl_net_showmap.sh net_version
+```
+
+These modes are built from captured native-valid request sequences under
+`/tmp/cm_sdk_api_sweep/frames`. The preload harness runs the real daemon main,
+replays the captured sequence from a helper thread, patches token/SID state,
+and mutates the decrypted target request body before wrapping it back into the
+loopback PSK transport.
+
+Current recommended weekend groups:
+
+- `net_get_servers`
+- `net_info_version`
+- `net_version`
+
+Do not spend first-class weekend workers on `net_access` or `net_access2`
+yet. On the current validated seeds they collapse to the same coverage
+fingerprint as `net_info_system`.
+
+The weekend wrapper is:
+
+```bash
+bash fuzzer/run_cm_afl_netns_weekend.sh
+```
+
+That launches `18` namespaced workers total:
+
+- `6` for `net_get_servers`
+- `6` for `net_info_version`
+- `6` for `net_version`
+
+Each worker gets a private network/filesystem namespace, so the host
+`codemeter` service can remain active. Use `--timeout-ms 30000+`; the earlier
+shorter timeout caused AFL dry-run calibration failures in the namespaced net
+path.
 
 ## Prerequisites
 

@@ -64,8 +64,10 @@ Since the original vendor-style writeup, two additional results matter:
   crash family; and
 - broader QEMU tracing of native-valid public SDK commands identified a
   different set of hot native handlers than the earlier `0x9f...` candidates;
-  three of those native hot paths now have direct-call AFL++/QEMU mains:
-  `bef830`, `7f9060`, and `54ace0`.
+  the later direct-call native triplet (`bef830`, `7f9060`, `54ace0`) was
+  useful for hot-path discovery, but the current packet-translatable direction
+  is the newer network-faithful `net_*` AFL/QEMU harness family plus the
+  namespaced weekend launcher in `fuzzer/run_cm_afl_netns_weekend.sh`.
 
 Those newer findings are documented in `AFL_QEMU_NATIVE_FUZZING.md`.
 
@@ -166,7 +168,7 @@ distinct crash because the cores still classify into the `0x5e` bucket.
 | `NEXT_STEPS_PROCESS.md` | historical reduction process that led to the first deterministic repro |
 | `GHIDRA_AUTOMATION.md` | no-click Ghidra GUI startup and MCP automation path |
 | `SDK_SEED_CAPTURE.md` | official SDK probe, MITM capture, and baseline valid seeds |
-| `AFL_QEMU_NATIVE_FUZZING.md` | in-process AFL++/QEMU harness, crash minimization, native-valid coverage, and next harness targets |
+| `AFL_QEMU_NATIVE_FUZZING.md` | `0x5e` in-process AFL++/QEMU harness, native-valid coverage, direct-call native triplet, and network-faithful `net_*`/namespace runners |
 | `fuzzer/README.md` | fuzzer and repro tool guide |
 | `disasm/README.md` | index of annotated disassembly windows |
 | `memory_snapshots/README.md` | index of extracted core-memory snapshots |

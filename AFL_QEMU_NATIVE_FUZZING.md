@@ -40,6 +40,12 @@ It is complementary to:
    - `FUN_007feb90`
    - `FUN_00552530`
    - `FUN_0071ab20`
+6. The later direct-call native triplet (`bef830`, `7f9060`, `54ace0`) was
+   useful for hot-path discovery, but it fuzzes post-parse heap state and does
+   not translate cleanly back into network requests.
+7. The current weekend-scale recommendation is the newer network-faithful
+   `net_*` harness family, where the AFL input is again the decrypted native
+   C->D request body.
 
 ## Current Reproducer Surface
 
@@ -579,3 +585,135 @@ The current recommended order remains:
 3. `bef830`
 
 That ranking reflects runner cleanliness, not just hotness.
+
+## Network-Faithful Native Request Harnesses
+
+The direct-call triplet above was a useful exploratory step, but it breaks the
+most important property the original `0x5e` harness had: the AFL artifact is
+not itself a request body. The next pivot was therefore back to a
+network-faithful model where the fuzz input again maps directly to bytes sent
+over the wire.
+
+### Files
+
+- preload harness:
+  - `preload/cm_afl_harness.c`
+  - generated assets: `preload/cm_afl_net_assets.h`
+- asset / corpus builders:
+  - `scripts/build_cm_afl_net_assets.py`
+  - `scripts/build_cm_afl_net_corpus.py`
+  - `scripts/rebuild_cm_afl_net_assets.sh`
+  - `scripts/build_cm_afl_harness.sh`
+- single-run proofs:
+  - `scripts/run_cm_afl_net_showmap.sh`
+  - `scripts/start_cm_afl_net_qemu.sh`
+- namespaced scale-out:
+  - `fuzzer/cm_afl_netns_init.sh`
+  - `fuzzer/cm_afl_netns_launcher.py`
+  - `fuzzer/run_cm_afl_netns_weekend.sh`
+
+### Harness shape
+
+These `net_*` modes do not call a mid-pipeline helper directly. Instead, the
+preload harness:
+
+1. starts the real `CodeMeterLin` daemon main on the main thread;
+2. launches a helper thread;
+3. replays captured native-valid C->D frame sequences for one request family;
+4. patches per-session token and SID fields before each send; and
+5. mutates the decrypted target request body with AFL input before wrapping it
+   back into the loopback PSK `0xa0` AES-CBC-CTS transport.
+
+That means the AFL testcase is once again a network-meaningful request body,
+not a synthetic heap blob.
+
+### Current modes
+
+Validated network-faithful modes:
+
+- `net_get_servers`
+- `net_access`
+- `net_access2`
+- `net_version`
+- `net_info_system`
+- `net_info_version`
+
+These modes are built from captured native-valid sequences under
+`/tmp/cm_sdk_api_sweep/frames`.
+
+### `afl-showmap` proof
+
+The current input-sensitive coverage proofs are:
+
+- `net_get_servers`
+  - base: `44962` tuples, hash `2a326f50979f227e`
+  - zero-seed: `44656` tuples, hash `e34058b8594ff0e7`
+- `net_info_system`
+  - base: `32222` tuples, hash `e8633b9db70197dc`
+  - zero-seed: `32222` tuples, hash `b46e915c3cecaa3a`
+- `net_info_version`
+  - base: `45074` tuples, hash `417f722d52dff583`
+- `net_access`
+  - base: `32222` tuples, hash `e8633b9db70197dc`
+- `net_access2`
+  - base: `32222` tuples, hash `e8633b9db70197dc`
+- `net_version`
+  - base: `45090` tuples, hash `7d3c2615a127b08f`
+  - zero-seed: `32222` tuples, hash `b46e915c3cecaa3a`
+
+The key conclusion is that these are not all equally distinct yet.
+
+### Recommended weekend groups
+
+For a weekend namespaced run, the best current three groups are:
+
+- `net_get_servers`
+- `net_info_version`
+- `net_version`
+
+Do not spend first-class workers on `net_access` or `net_access2` yet. On the
+current validated seeds they collapse to the same coverage fingerprint as
+`net_info_system`.
+
+### Namespaced launcher
+
+The weekend-scale launcher runs one worker per Linux namespace so that each
+instance gets:
+
+- private loopback namespace with its own `:22350`;
+- private `/etc/wibu/CodeMeter`;
+- private `/var/lib/CodeMeter`;
+- private `/var/log/CodeMeter`;
+- private `/run/lock`;
+- private `/tmp`;
+- private `/dev/shm`; and
+- private `/var/tmp/cm_cores`.
+
+Because the workers live in isolated namespaces, the host `codemeter` service
+can stay up while the fuzz campaign runs.
+
+The current recommended weekend wrapper is:
+
+```bash
+bash fuzzer/run_cm_afl_netns_weekend.sh
+```
+
+That launches:
+
+- modes:
+  - `net_get_servers`
+  - `net_info_version`
+  - `net_version`
+- `6` workers per mode
+- total `18` workers
+
+### Timeout note
+
+The first 18-worker launch failed during AFL dry-run calibration because the
+older timeout was too small for the namespaced network-faithful path. The
+working default is now:
+
+- `--timeout-ms 30000+`
+
+The one-worker smoke with that timeout completed calibration, wrote
+`fuzzer_stats`, and stayed on the real namespaced daemon path.
