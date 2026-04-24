@@ -56,6 +56,43 @@ That harness reads parser-visible cleartext, injects itself into
 wrapper/parser path in-process. The higher-level findings and current target
 selection are documented in `../AFL_QEMU_NATIVE_FUZZING.md`.
 
+There is now also a native direct-call triplet for three non-`0x5e` hot
+native paths:
+
+- `scripts/build_cm_afl_native_assets.py`
+- `scripts/build_cm_afl_native_corpus.py`
+- `scripts/run_cm_afl_native_showmap.sh`
+- `scripts/start_cm_afl_native_qemu.sh`
+- `scripts/start_cm_afl_native_triplet.sh`
+- generated assets:
+  - `preload/cm_afl_native_assets.h`
+
+Those modes are:
+
+- `bef830`
+- `7f9060`
+- `54ace0`
+
+The triplet launcher starts one AFL main for each:
+
+```bash
+bash scripts/start_cm_afl_native_triplet.sh
+```
+
+To prove one mode with `afl-showmap` first:
+
+```bash
+bash scripts/run_cm_afl_native_showmap.sh bef830
+bash scripts/run_cm_afl_native_showmap.sh 7f9060
+bash scripts/run_cm_afl_native_showmap.sh 54ace0
+```
+
+To add a secondary worker to an existing mode:
+
+```bash
+bash scripts/start_cm_afl_native_qemu.sh 7f9060 /path/to/out/7f9060 S 7f9060_s1
+```
+
 ## Prerequisites
 
 - `python3` ≥ 3.10 (uses `list[bytes]` type hints)

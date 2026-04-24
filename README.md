@@ -63,7 +63,9 @@ Since the original vendor-style writeup, two additional results matter:
   but its first saved crashes minimized back to the same known `0x8f431d`
   crash family; and
 - broader QEMU tracing of native-valid public SDK commands identified a
-  different set of hot native handlers than the earlier `0x9f...` candidates.
+  different set of hot native handlers than the earlier `0x9f...` candidates;
+  three of those native hot paths now have direct-call AFL++/QEMU mains:
+  `bef830`, `7f9060`, and `54ace0`.
 
 Those newer findings are documented in `AFL_QEMU_NATIVE_FUZZING.md`.
 

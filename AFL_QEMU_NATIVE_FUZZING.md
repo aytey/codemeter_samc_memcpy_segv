@@ -389,3 +389,193 @@ Targets that currently look lower-value:
 
 This keeps the next harness attached to the actual native hot path instead of
 repeating the already-understood `0x5e` reinterpretation bug.
+
+## Native Direct-Call Triplet
+
+That next step is now in place. The repo has a second-stage native harness
+setup for three hot native paths:
+
+- `bef830` for the `FUN_00bef130` family
+- `7f9060` for the `FUN_007fd840` family
+- `54ace0` for the `FUN_00552530` family
+
+These are intentionally the traced hot offsets / wrapper entries, not the
+larger enclosing Ghidra function starts. The direct-call targets were chosen
+because they are:
+
+- reached by native-valid public SDK traffic;
+- narrow enough to snapshot and relocate in-process; and
+- materially more stable than the earlier cold `0x9f...` candidates.
+
+### Files
+
+- entry tracer:
+  - `gdb_scripts/trace_function_entry.py`
+  - `scripts/trace_function_entry.py`
+- asset generator:
+  - `scripts/build_cm_afl_native_assets.py`
+  - generated header: `preload/cm_afl_native_assets.h`
+- preload harness:
+  - `preload/cm_afl_harness.c`
+- corpus builder:
+  - `scripts/build_cm_afl_native_corpus.py`
+- runners:
+  - `scripts/run_cm_afl_native_showmap.sh`
+  - `scripts/start_cm_afl_native_qemu.sh`
+  - `scripts/start_cm_afl_native_triplet.sh`
+
+### How the call contracts were recovered
+
+The process was:
+
+1. trace native-valid commands with QEMU block coverage to find hot offsets;
+2. attach hidden GDB to live `CodeMeterLin` and hardware-break on those hot
+   offsets;
+3. dump entry registers, pointer-like arguments, and a short backtrace;
+4. inspect the immediate callers in raw disassembly; and
+5. choose the smallest wrapper / hot callee that preserved a stable live ABI.
+
+The generic entry tracer is `scripts/trace_function_entry.py`, which drives
+the hidden-GDB script at `gdb_scripts/trace_function_entry.py`.
+
+The traces used for the current asset header were:
+
+- `bef830` under `access_info_system`
+- `7f9060` under `access_info_system`
+- `54ace0` under `get_servers`
+
+### Snapshot / relocation model
+
+`scripts/build_cm_afl_native_assets.py` turns the captured traces into
+`preload/cm_afl_native_assets.h`. For each mode it records:
+
+- original PIE base;
+- direct-call function offset;
+- preserved scalar register values;
+- the readable argument blobs captured at entry; and
+- mutation metadata describing which blob region should receive AFL input.
+
+At runtime the preload harness:
+
+- clones those blobs into fresh heap memory;
+- relocates qwords that originally pointed into the executable mapping to the
+  current PIE base;
+- relocates qwords that originally pointed inside a captured blob to the new
+  live clone address; and
+- then calls the real native target in-process.
+
+This keeps the harness in-process while preserving enough live pointer
+topology for the native handlers to run.
+
+### Current mode details
+
+#### `bef830`
+
+- target offset: `0xbef830`
+- family: `FUN_00bef130`
+- current mutation strategy:
+  - mutate a region in the captured `rdi` blob at offset `0x200`
+- current seed set:
+  - `large.bin`
+
+This mode is working, but still shows slight instrumentation variability
+(`var_byte_count` / `corpus_variable` nonzero). It is usable, but it is the
+least clean of the three current mains.
+
+#### `7f9060`
+
+- target offset: `0x7f9060`
+- family: `FUN_007fd840`
+- current mutation strategy:
+  - mutate a region in the captured `rsi` blob at offset `0x100`
+  - set `rdx = input_len`
+  - mirror the same length into the captured blob fields at `+0x10` and
+    `+0x18`
+- current seed set:
+  - `small.bin`
+
+This is currently the cleanest of the three native mains.
+
+#### `54ace0`
+
+- target offset: `0x54ace0`
+- family: `FUN_00552530`
+- current mutation strategy:
+  - mutate a region in the captured `rsi` blob at offset `0x20`
+- current seed set:
+  - `host-ish.bin`
+  - `medium.bin`
+
+This is the most distinct additional native surface because it comes from the
+`get-servers` path rather than the `access/info` family.
+
+### Seed corpus policy
+
+The native corpora are deliberately minimal.
+
+Early broader corpora were a mistake:
+
+- `7f9060` had seeds that AFL immediately binned as crashing during dry run;
+- `54ace0` had duplicate low-value seeds; and
+- those made the mains look worse than they were.
+
+`scripts/build_cm_afl_native_corpus.py` now deletes stale `.bin` files and
+rebuilds only the curated seeds per mode.
+
+### Showmap proof
+
+Each mode is proven with `afl-showmap` before being launched as a main:
+
+```bash
+bash scripts/run_cm_afl_native_showmap.sh bef830
+bash scripts/run_cm_afl_native_showmap.sh 7f9060
+bash scripts/run_cm_afl_native_showmap.sh 54ace0
+```
+
+The mode-specific instrumentation ranges are:
+
+- `bef830`: `0xbeeac0-0xbf0000`
+- `7f9060`: `0x7f9000-0x7fe800`
+- `54ace0`: `0x54ace0-0x553300`
+
+### Launching the three mains
+
+The three working mains can be launched together with:
+
+```bash
+bash scripts/start_cm_afl_native_triplet.sh
+```
+
+Or individually:
+
+```bash
+bash scripts/start_cm_afl_native_qemu.sh bef830
+bash scripts/start_cm_afl_native_qemu.sh 7f9060
+bash scripts/start_cm_afl_native_qemu.sh 54ace0
+```
+
+All native runners currently use:
+
+- `AFL_PRELOAD=preload/cm_afl_harness.so`
+- `AFL_NO_FORKSRV=1`
+- mode-specific `AFL_QEMU_INST_RANGES`
+- `afl-fuzz -Q`
+
+### Adding secondaries
+
+Once the mains are running and producing sane `fuzzer_stats`, add secondaries
+per mode rather than launching a larger mixed farm:
+
+```bash
+bash scripts/start_cm_afl_native_qemu.sh bef830  /path/to/out/bef830  S bef830_s1
+bash scripts/start_cm_afl_native_qemu.sh 7f9060 /path/to/out/7f9060 S 7f9060_s1
+bash scripts/start_cm_afl_native_qemu.sh 54ace0 /path/to/out/54ace0 S 54ace0_s1
+```
+
+The current recommended order remains:
+
+1. `7f9060`
+2. `54ace0`
+3. `bef830`
+
+That ranking reflects runner cleanliness, not just hotness.
