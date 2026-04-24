@@ -148,9 +148,27 @@ distinct crash because the cores still classify into the `0x5e` bucket.
 | `FIX_GUIDANCE.md` | source-level fix guidance and defense in depth |
 | `MULTI_INSTANCE_FUZZING.md` | namespace farm design and first 1-hour findings |
 | `NEXT_STEPS_PROCESS.md` | historical reduction process that led to the first deterministic repro |
+| `GHIDRA_AUTOMATION.md` | no-click Ghidra GUI startup and MCP automation path |
+| `SDK_SEED_CAPTURE.md` | official SDK probe, MITM capture, and baseline valid seeds |
 | `fuzzer/README.md` | fuzzer and repro tool guide |
 | `disasm/README.md` | index of annotated disassembly windows |
 | `memory_snapshots/README.md` | index of extracted core-memory snapshots |
+
+## No-Click Ghidra GUI Startup
+
+To let Codex bring up the correct Ghidra GUI project and binary without Andrew
+clicking through FrontEnd or CodeBrowser, use:
+
+```bash
+python3 ghidra_scripts/start_codex_ghidra_gui.py
+```
+
+By default this launcher uses `DISPLAY=:100` and validates that the matching X
+socket exists before launch. You can override the display or project with
+`--display` and `--project`. It patches FrontEnd to auto-load
+`GhidraMCPPlugin`, pins the startup project to `CodeMeterLin_import_only`,
+waits for the FrontEnd MCP socket, and opens `/CodeMeterLin` over the UDS
+transport. Full details are in `GHIDRA_AUTOMATION.md`.
 
 ## Suggested Fix Direction
 
