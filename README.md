@@ -67,7 +67,8 @@ Since the original vendor-style writeup, two additional results matter:
   the later direct-call native triplet (`bef830`, `7f9060`, `54ace0`) was
   useful for hot-path discovery, but the current packet-translatable direction
   is the newer network-faithful `net_*` AFL/QEMU harness family plus the
-  namespaced weekend launcher in `fuzzer/run_cm_afl_netns_weekend.sh`.
+  namespaced weekend launchers in `fuzzer/run_cm_afl_netns_weekend.sh` and
+  `fuzzer/run_cm_afl_netns_weekend6.sh`.
 
 Those newer findings are documented in `AFL_QEMU_NATIVE_FUZZING.md`.
 

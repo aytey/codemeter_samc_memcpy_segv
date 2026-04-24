@@ -610,6 +610,8 @@ over the wire.
 - namespaced scale-out:
   - `fuzzer/cm_afl_netns_init.sh`
   - `fuzzer/cm_afl_netns_launcher.py`
+  - `fuzzer/run_cm_afl_netns_smoke6.sh`
+  - `fuzzer/run_cm_afl_netns_weekend6.sh`
   - `fuzzer/run_cm_afl_netns_weekend.sh`
 
 ### Harness shape
@@ -692,6 +694,15 @@ instance gets:
 Because the workers live in isolated namespaces, the host `codemeter` service
 can stay up while the fuzz campaign runs.
 
+The current launcher behavior that actually passes smoke is:
+
+- sequential startup, not “spawn everything at once”;
+- mains before secondaries;
+- one distinct host CPU per worker via `taskset`;
+- `AFL_NO_AFFINITY=1` inside the worker so AFL does not repin everything back
+  onto core `0`; and
+- the normal AFL/QEMU forkserver kept enabled.
+
 The current recommended weekend wrapper is:
 
 ```bash
@@ -707,13 +718,40 @@ That launches:
 - `6` workers per mode
 - total `18` workers
 
+The broader six-mode wrappers are:
+
+```bash
+bash fuzzer/run_cm_afl_netns_smoke6.sh
+bash fuzzer/run_cm_afl_netns_weekend6.sh
+```
+
+Those cover:
+
+- `net_access`
+- `net_access2`
+- `net_version`
+- `net_info_system`
+- `net_info_version`
+- `net_get_servers`
+
+and use the same sequential launcher path.
+
 ### Timeout note
 
 The first 18-worker launch failed during AFL dry-run calibration because the
 older timeout was too small for the namespaced network-faithful path. The
 working default is now:
 
-- `--timeout-ms 30000+`
+- `--timeout-ms 60000+`
 
-The one-worker smoke with that timeout completed calibration, wrote
-`fuzzer_stats`, and stayed on the real namespaced daemon path.
+The current namespaced net launch path also keeps the normal AFL/QEMU
+forkserver enabled. For these `net_*` modes, forcing `AFL_NO_FORKSRV=1`
+regresses dry-run calibration back to all-timeout aborts even with the longer
+timeout.
+
+The current launcher also passed:
+
+- a 6-mode / 6-worker smoke (`1` worker per mode); and
+- a 6-mode / 12-worker smoke (`2` workers per mode)
+
+under the sequential-start / `60000+` configuration.

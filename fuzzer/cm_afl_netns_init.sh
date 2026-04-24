@@ -26,6 +26,8 @@ set -euo pipefail
 : "${READY_FILE:?}"
 : "${INST_RANGES:?}"
 : "${TIMEOUT_MS:=8000+}"
+: "${CM_AFL_NET_TRANSPORT:=pair}"
+: "${CPU_CORE:=}"
 
 if [ "$$" != "1" ]; then
     echo "ERROR: not running as PID 1; refusing to remount system directories" >&2
@@ -59,17 +61,23 @@ case "$WORKER_ROLE" in
     *) echo "ERROR: WORKER_ROLE must be M, S, or none" >&2; exit 3 ;;
 esac
 
+RUN_PREFIX=""
+if [ -n "${CPU_CORE}" ]; then
+    RUN_PREFIX="taskset -c ${CPU_CORE}"
+fi
+
 runuser -u daemon -- bash -lc "
     umask 022
-    exec env \
+    exec ${RUN_PREFIX} env \
       PATH=/usr/sbin:/usr/bin:/sbin:/bin \
       HOME=/var/lib/CodeMeter \
       USER=daemon \
       LOGNAME=daemon \
       AFL_PRELOAD='${HARNESS_SO}' \
       CM_AFL_HARNESS_MODE='${MODE}' \
+      CM_AFL_NET_TRANSPORT='${CM_AFL_NET_TRANSPORT}' \
+      AFL_NO_AFFINITY=1 \
       AFL_SKIP_CPUFREQ=1 \
-      AFL_NO_FORKSRV=1 \
       AFL_QEMU_INST_RANGES='${INST_RANGES}' \
       '${AFLPP_ROOT}/afl-fuzz' \
       -Q \

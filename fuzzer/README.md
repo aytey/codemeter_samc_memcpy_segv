@@ -25,6 +25,8 @@ current crash story and campaign chronology.
 | `fuzz_farm_namespace_init.sh` | PID-1 init script each farm's namespace runs; mounts, starts daemon, execs supervisor |
 | `cm_afl_netns_init.sh` | PID-1 init for one namespaced AFL/QEMU network-faithful worker |
 | `cm_afl_netns_launcher.py` | multi-worker namespace launcher for the network-faithful `net_*` AFL/QEMU modes |
+| `run_cm_afl_netns_smoke6.sh` | six-mode namespaced smoke wrapper (`1` worker per mode) |
+| `run_cm_afl_netns_weekend6.sh` | six-mode namespaced weekend wrapper (`3` workers per mode) |
 | `run_cm_afl_netns_weekend.sh` | 18-worker weekend wrapper for the recommended `net_*` modes |
 | `remote_cm_fuzz_launcher.py` | remote daemon-to-server protocol fuzzer with SSH-based target crash monitoring |
 | `samc_veth_farm_launcher.py` | local multi-daemon farm where fuzz traffic reaches each daemon over a veth address, not loopback |
@@ -162,9 +164,29 @@ That launches `18` namespaced workers total:
 - `6` for `net_version`
 
 Each worker gets a private network/filesystem namespace, so the host
-`codemeter` service can remain active. Use `--timeout-ms 30000+`; the earlier
-shorter timeout caused AFL dry-run calibration failures in the namespaced net
-path.
+`codemeter` service can remain active. The working launcher path now starts
+workers sequentially, pins each worker to a distinct host CPU with `taskset`,
+and sets `AFL_NO_AFFINITY=1` so AFL does not repin them back onto core `0`.
+Use `--timeout-ms 60000+`; the earlier shorter timeout caused AFL dry-run
+calibration failures in the namespaced net path. Keep the normal QEMU
+forkserver enabled for the `net_*` workers; forcing `AFL_NO_FORKSRV=1`
+regresses those same namespaced dry runs back to all-timeout abort behavior.
+
+For maximum packet-surface spread, the broader six-mode wrappers are:
+
+```bash
+bash fuzzer/run_cm_afl_netns_smoke6.sh
+bash fuzzer/run_cm_afl_netns_weekend6.sh
+```
+
+Those cover:
+
+- `net_access`
+- `net_access2`
+- `net_version`
+- `net_info_system`
+- `net_info_version`
+- `net_get_servers`
 
 ## Prerequisites
 

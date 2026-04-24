@@ -42,6 +42,9 @@ def json_write(path: Path, obj: Any) -> None:
 
 
 def build_farm_root(farm_root: Path) -> None:
+    if farm_root.exists():
+        sh(["rm", "-rf", str(farm_root)])
+
     subdirs = [
         "etc/wibu/CodeMeter",
         "var/lib/CodeMeter",
@@ -96,6 +99,7 @@ def spawn_worker(worker: dict[str, Any], args: argparse.Namespace) -> subprocess
         "READY_FILE": str(worker["ready_file"]),
         "INST_RANGES": worker["inst_ranges"],
         "TIMEOUT_MS": args.timeout_ms,
+        "CPU_CORE": str(worker["cpu_core"]),
     })
 
     log_fh = worker["ns_log"].open("wb")
@@ -172,9 +176,34 @@ def build_assets_and_corpora(args: argparse.Namespace) -> None:
         )
 
 
+def build_worker_corpus(mode: str, args: argparse.Namespace, out_root: Path) -> Path:
+    source_dir = ROOT / "seeds" / f"cm_afl_{mode}"
+    if not args.single_seed_name:
+        return source_dir
+
+    seed_path = source_dir / args.single_seed_name
+    if not seed_path.is_file():
+        raise FileNotFoundError(f"missing seed for {mode}: {seed_path}")
+
+    corpus_dir = out_root / "worker_corpus" / mode
+    corpus_dir.mkdir(parents=True, exist_ok=True)
+    dst = corpus_dir / args.single_seed_name
+    if dst.exists():
+        dst.unlink()
+    os.link(seed_path, dst)
+    return corpus_dir
+
+
 def make_workers(args: argparse.Namespace, out_root: Path, root_dir: Path) -> list[dict[str, Any]]:
     workers: list[dict[str, Any]] = []
     idx = 0
+    cpu_count = os.cpu_count() or 1
+
+    def pick_cpu(slot: int) -> int:
+        if cpu_count <= 1:
+            return 0
+        return 1 + (slot % (cpu_count - 1))
+
     for mode in args.modes:
         sync_dir = out_root / mode / "sync"
         sync_dir.mkdir(parents=True, exist_ok=True)
@@ -182,7 +211,9 @@ def make_workers(args: argparse.Namespace, out_root: Path, root_dir: Path) -> li
         chmod_target.mkdir(parents=True, exist_ok=True)
         os.chmod(chmod_target, 0o777)
 
-        for slot in range(args.workers_per_mode):
+    for slot in range(args.workers_per_mode):
+        for mode in args.modes:
+            sync_dir = out_root / mode / "sync"
             role = "M" if slot == 0 else "S"
             worker_id = f"{mode}_main" if slot == 0 else f"{mode}_s{slot}"
             farm_root = root_dir / f"worker_{idx:02d}"
@@ -196,11 +227,12 @@ def make_workers(args: argparse.Namespace, out_root: Path, root_dir: Path) -> li
                 "hostname": f"cmafl{idx:02d}",
                 "farm_root": farm_root,
                 "sync_dir": sync_dir,
-                "corpus_dir": ROOT / "seeds" / f"cm_afl_{mode}",
+                "corpus_dir": build_worker_corpus(mode, args, out_root),
                 "log_path": out_dir / "afl.log",
                 "ns_log": out_dir / "namespace.log",
                 "ready_file": out_dir / "ready",
                 "inst_ranges": inst_ranges_for(mode),
+                "cpu_core": pick_cpu(idx),
             })
             idx += 1
     return workers
@@ -216,6 +248,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--codemeter-bin", type=Path, default=Path("/usr/sbin/CodeMeterLin"))
     ap.add_argument("--aflpp-root", type=Path, default=Path("/home/avj/clones/AFLplusplus"))
     ap.add_argument("--timeout-ms", default="30000+")
+    ap.add_argument("--single-seed-name", default=None,
+                    help="if set, use only this seed filename from each mode corpus")
     ap.add_argument("--ready-timeout", type=float, default=120.0)
     ap.add_argument("--wall-clock", type=int, default=0,
                     help="seconds to run before stopping; 0 means run until interrupted")
@@ -234,16 +268,17 @@ def main() -> int:
     build_assets_and_corpora(args)
     workers = make_workers(args, out_root, args.root)
 
-    print(f"[plan] modes={args.modes} workers_per_mode={args.workers_per_mode} total={len(workers)}")
-    for worker in workers:
-        print(f"  {worker['worker_id']}: mode={worker['mode']} role={worker['role']} root={worker['farm_root']}")
-        build_farm_root(worker["farm_root"])
-        if worker["ready_file"].exists():
-            worker["ready_file"].unlink()
-        spawn_worker(worker, args)
-
     try:
+        print(f"[plan] modes={args.modes} workers_per_mode={args.workers_per_mode} total={len(workers)}")
         for worker in workers:
+            print(
+                f"  {worker['worker_id']}: mode={worker['mode']} role={worker['role']} "
+                f"cpu={worker['cpu_core']} root={worker['farm_root']}"
+            )
+            build_farm_root(worker["farm_root"])
+            if worker["ready_file"].exists():
+                worker["ready_file"].unlink()
+            spawn_worker(worker, args)
             if not wait_for_ready(worker, args.ready_timeout):
                 raise RuntimeError(f"worker did not become ready: {worker['worker_id']} ({worker['mode']})")
         json_write(out_root / "launcher_config.json", {
