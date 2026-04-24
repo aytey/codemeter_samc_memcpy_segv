@@ -16,7 +16,8 @@ written up in a form that can be extracted for vendor triage.
 
 ## Current State
 
-As of 2026-04-22, the client-facing SAMC work has one confirmed crash class:
+As of 2026-04-24, the client-facing SAMC work still has one confirmed
+network-reachable crash class:
 
 ```text
 memcpy_8f431d_prefixed_hello
@@ -55,6 +56,16 @@ The older captured HELLO prefix `5e355ed6f2` is retained as provenance. It was
 the first deterministic reduced trigger, but the later prefix campaign showed
 that the random-looking tail is not special. The current default HELLO
 reproducer uses the simpler zero-tail prefix `5e00000000`.
+
+Since the original vendor-style writeup, two additional results matter:
+
+- the in-process AFL++/QEMU harness for the `0x5e` parser path is now working,
+  but its first saved crashes minimized back to the same known `0x8f431d`
+  crash family; and
+- broader QEMU tracing of native-valid public SDK commands identified a
+  different set of hot native handlers than the earlier `0x9f...` candidates.
+
+Those newer findings are documented in `AFL_QEMU_NATIVE_FUZZING.md`.
 
 Run repros only on a disposable target because they intentionally crash the
 daemon:
@@ -127,6 +138,9 @@ The research history is documented in `RESEARCH_LOG.md`. Key campaign results:
 | Supervisor reduction, 2026-04-21 | isolated historical HELLO prefix `5e355ed6f2` from `/home/avj/clones/ax_fuzz/output/light_supervisor_mixed2_20260421_103043` |
 | 8-farm namespace run, 2026-04-21 | 23.2M attempts, 67 crashes, 0 new signatures; ACK-only fuzzing also reached the same crash |
 | 8-farm ECDH prefix run, 2026-04-22 | 1,398,462 attempts, 360 classified crashes, 0 new signatures; simplified HELLO and ACK zero-tail prefixes |
+| 192-farm SDK crash matrix, 2026-04-24 | broadened the same crash family to additional native bodies such as `0x11`, `0x6d`, `0x6f`, and `0x72`, but did not produce a second crash bucket |
+| In-process AFL++/QEMU `0x5e` harness, 2026-04-24 | working preload/QEMU fuzz target; initial crashes minimized to the same network-reachable `0x8f431d` bug |
+| Native-valid QEMU block coverage, 2026-04-24 | identified `FUN_00bef130`, `FUN_007fd840`, `FUN_007feb90`, `FUN_00552530`, and `FUN_0071ab20` as the real hot native handler families |
 
 The 6-hour ECDH prefix run did not find a second crash class. It did make the
 two repro routes cleaner and increased confidence that the opcode-`0x5e`
@@ -150,6 +164,7 @@ distinct crash because the cores still classify into the `0x5e` bucket.
 | `NEXT_STEPS_PROCESS.md` | historical reduction process that led to the first deterministic repro |
 | `GHIDRA_AUTOMATION.md` | no-click Ghidra GUI startup and MCP automation path |
 | `SDK_SEED_CAPTURE.md` | official SDK probe, MITM capture, and baseline valid seeds |
+| `AFL_QEMU_NATIVE_FUZZING.md` | in-process AFL++/QEMU harness, crash minimization, native-valid coverage, and next harness targets |
 | `fuzzer/README.md` | fuzzer and repro tool guide |
 | `disasm/README.md` | index of annotated disassembly windows |
 | `memory_snapshots/README.md` | index of extracted core-memory snapshots |

@@ -6,7 +6,8 @@ directions, reduction notes, and the tooling that was built along the way.
 
 ## Current state
 
-As of 2026-04-22, the client-facing SAMC work has one confirmed crash class:
+As of 2026-04-24, the client-facing SAMC work still has one confirmed
+network-reachable crash class:
 
 ```text
 memcpy_8f431d_prefixed_hello
@@ -193,6 +194,101 @@ decrypted payload length. The helper allocates `size` bytes, then performs a
 source read of `size` bytes from `payload+0x14`; the read walks past the
 decoded input buffer and faults in libc `memcpy`/`memmove`.
 
+### SDK reinterpretation expansion
+
+The later SDK-seeded campaigns established that the same `0x5e -> 0x8f431d`
+bug class is reachable from more than just HELLO and ACK shapes. Reproducers
+were added or validated for representative native bodies including:
+
+- `access_info_system`
+- `access_public_key`
+- `access_calc_sig`
+- `access_crypt2`
+- `access_cryptsim`
+- `access_validate_signedtime`
+- `access_lt_create_context`
+- `access_lt_import_update`
+- `access_lt_cleanup`
+
+This broadened the trigger surface for the known bug class but did not produce
+an independent second crash bucket.
+
+### In-process AFL++/QEMU harness for `0x5e`
+
+An in-process preload harness was then built around the `0x5e` parser family:
+
+- `preload/cm_afl_harness.c`
+- `scripts/build_cm_afl_harness.sh`
+- `scripts/start_cm_afl_qemu.sh`
+
+This harness resolves the `CodeMeterLin` PIE base in-process and calls the
+real `0x8f3c20 -> 0x8f4e60` wrapper/parser path directly. The first AFL++ QEMU
+run produced saved crashes and hangs, but after minimization all saved crash
+files collapsed to the same 20-byte parser-visible trigger:
+
+```text
+5e30303030303030303030303030303030303030
+```
+
+That trigger:
+
+- crashes the harness;
+- crashes on direct network replay; and
+- crashes when injected into a valid SDK-generated session.
+
+So the harness found a new minimal trigger for the known bug class, not a new
+independent vulnerability.
+
+### Native-valid coverage discovery
+
+To step outside the `0x5e` reinterpretation path, the native public SDK
+commands were graded by how healthy they were on this host.
+
+Strong/native-valid commands:
+
+- `version-null`
+- `get-servers`
+- `access`
+- `access2`
+- `access-version`
+- `access2-version`
+- `access-info-system`
+- `access2-info-system`
+- `access-info-version`
+- `access2-info-version`
+
+The obvious `0x5e`-adjacent candidates:
+
+- `FUN_009f2ca0`
+- `FUN_008f08f0`
+- `FUN_009f4e60`
+
+were then traced under native-valid traffic and stayed cold. That ruled them
+out as good second-stage native harness targets.
+
+### Broader QEMU block coverage on native-valid commands
+
+A broader QEMU plugin was then used to diff startup-only coverage against one
+native-valid request per run. This identified the actual native hot path.
+
+The most important native hot families are:
+
+- `FUN_00bef130`
+- `FUN_007fd840`
+- `FUN_007feb90`
+- `FUN_00552530`
+- `FUN_0071ab20`
+
+Static inspection of those functions showed substantial copy/move-heavy
+behavior, especially in:
+
+- `FUN_00bef130`
+- `FUN_00552530`
+- `FUN_007fd840`
+
+These are now the best current candidates for the next in-process harness
+targets.
+
 ## Open directions
 
 - Treat the opcode-`0x22` observations as a separate parser/no-response
@@ -202,6 +298,6 @@ decoded input buffer and faults in libc `memcpy`/`memmove`.
   client-facing crash class. The DS tooling exists, but it should not be
   conflated with the opcode-`0x5e` SAMC crash until it produces its own
   signature.
-- For finding additional SAMC bugs, avoid immediately rediscovering opcode
-  `0x5e` by filtering known prefix shapes or running narrowed campaigns such
-  as structurally aware `0x64` request fuzzing.
+- For additional client-facing SAMC bugs, shift effort from broad overnight
+  traffic campaigns to direct in-process harnesses around the native hot
+  families identified above, starting with `FUN_00bef130`.

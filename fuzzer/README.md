@@ -13,6 +13,9 @@ current crash story and campaign chronology.
 | `repro_prefixed_hello_standalone.py` | same HELLO reproducer as a single file; no project-local imports or data files |
 | `repro_ack_0x5e.py` | ACK-side two-frame reproducer: normal HELLO, live SID extraction, then crafted opcode-`0x5e` ACK |
 | `repro_prefixed_ack_standalone.py` | standalone ACK-side reproducer: normal HELLO, live SID extraction, then zero-tail prefixed ACK over PSK/ECDH |
+| `repro_sdk_crash.py` | fire-and-forget wrapper for the currently validated SDK-seeded crash variants |
+| `repro_sdk_mitm_case.py` | lower-level MITM reproducer that replays one valid SDK session and mutates one chosen client->daemon frame |
+| `replay_afl_5e_input.py` | replays a parser-visible AFL `0x5e` crash input back through the real network path |
 | `samc_light_supervisor.py` | high-throughput 16-worker attribution harness with per-worker ring dumps |
 | `samc_fuzz.py` | main fuzzer loop; stateful session replay with per-iteration mutation |
 | `samc_session_data.py` | canonical cleartext plaintexts captured from a real testbench session |
@@ -34,6 +37,24 @@ instances on the same host, each farm needs private `/tmp`, `/dev/shm`,
 config/state directories, IPC, and network namespaces, and the supervisor
 needs `--no-service-check` and a restricted `--core-dir` to work correctly
 inside a farm.
+
+## In-Process AFL++/QEMU
+
+The repo now also contains an in-process preload harness for the known `0x5e`
+parser family. The main files live outside `fuzzer/`:
+
+- `preload/cm_afl_harness.c`
+- `scripts/build_cm_afl_harness.sh`
+- `scripts/build_cm_afl_corpus.py`
+- `scripts/run_cm_afl_showmap.sh`
+- `scripts/run_cm_afl_qemu_smoke.sh`
+- `scripts/start_cm_afl_qemu.sh`
+- `scripts/triage_cm_afl_crashes.py`
+
+That harness reads parser-visible cleartext, injects itself into
+`CodeMeterLin` with `AFL_PRELOAD`, and calls the real `0x8f3c20 -> 0x8f4e60`
+wrapper/parser path in-process. The higher-level findings and current target
+selection are documented in `../AFL_QEMU_NATIVE_FUZZING.md`.
 
 ## Prerequisites
 
