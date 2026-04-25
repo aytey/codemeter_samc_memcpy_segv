@@ -26,7 +26,7 @@ set -euo pipefail
 : "${READY_FILE:?}"
 : "${INST_RANGES:?}"
 : "${TIMEOUT_MS:=8000+}"
-: "${CM_AFL_NET_TRANSPORT:=pair}"
+: "${CM_AFL_NET_TRANSPORT:=tcp}"
 : "${CPU_CORE:=}"
 
 if [ "$$" != "1" ]; then
@@ -54,42 +54,67 @@ mkdir -p "$(dirname "$WORKER_LOG")" "$SYNC_DIR"
 chmod 0777 "$(dirname "$WORKER_LOG")" "$SYNC_DIR" || true
 cd "$FARM_ROOT/work"
 
+ROLE_ARGS=()
 case "$WORKER_ROLE" in
-    M) ROLE_ARGS_STR="-M '$WORKER_ID'" ;;
-    S) ROLE_ARGS_STR="-S '$WORKER_ID'" ;;
-    none|"") ROLE_ARGS_STR="" ;;
+    M) ROLE_ARGS=(-M "$WORKER_ID") ;;
+    S) ROLE_ARGS=(-S "$WORKER_ID") ;;
+    none|"") ROLE_ARGS=() ;;
     *) echo "ERROR: WORKER_ROLE must be M, S, or none" >&2; exit 3 ;;
 esac
 
-RUN_PREFIX=""
-if [ -n "${CPU_CORE}" ]; then
-    RUN_PREFIX="taskset -c ${CPU_CORE}"
-fi
+DAEMON_UID="$(id -u daemon)"
+DAEMON_GID="$(id -g daemon)"
 
-runuser -u daemon -- bash -lc "
-    umask 022
-    exec ${RUN_PREFIX} env \
-      PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-      HOME=/var/lib/CodeMeter \
-      USER=daemon \
-      LOGNAME=daemon \
-      AFL_PRELOAD='${HARNESS_SO}' \
-      CM_AFL_HARNESS_MODE='${MODE}' \
-      CM_AFL_NET_TRANSPORT='${CM_AFL_NET_TRANSPORT}' \
-      AFL_NO_AFFINITY=1 \
-      AFL_SKIP_CPUFREQ=1 \
-      AFL_QEMU_INST_RANGES='${INST_RANGES}' \
-      '${AFLPP_ROOT}/afl-fuzz' \
-      -Q \
-      -t '${TIMEOUT_MS}' \
-      -m none \
-      ${ROLE_ARGS_STR} \
-      -i '${CORPUS_DIR}' \
-      -o '${SYNC_DIR}' \
-      -- \
-      '${CODEMETER_BIN}' @@ \
-      >'${WORKER_LOG}' 2>&1 < /dev/null
-" &
+if [ -n "${CPU_CORE}" ]; then
+    setpriv --reuid "${DAEMON_UID}" --regid "${DAEMON_GID}" --init-groups \
+      env \
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+        HOME=/var/lib/CodeMeter \
+        USER=daemon \
+        LOGNAME=daemon \
+        AFL_PRELOAD="${HARNESS_SO}" \
+        CM_AFL_HARNESS_MODE="${MODE}" \
+        CM_AFL_NET_TRANSPORT="${CM_AFL_NET_TRANSPORT}" \
+        AFL_NO_FORKSRV=1 \
+        AFL_NO_AFFINITY=1 \
+        AFL_SKIP_CPUFREQ=1 \
+        AFL_QEMU_INST_RANGES="${INST_RANGES}" \
+        taskset -c "${CPU_CORE}" \
+        "${AFLPP_ROOT}/afl-fuzz" \
+        -Q \
+        -t "${TIMEOUT_MS}" \
+        -m none \
+        "${ROLE_ARGS[@]}" \
+        -i "${CORPUS_DIR}" \
+        -o "${SYNC_DIR}" \
+        -- \
+        "${CODEMETER_BIN}" @@ \
+        >"${WORKER_LOG}" 2>&1 < /dev/null &
+else
+    setpriv --reuid "${DAEMON_UID}" --regid "${DAEMON_GID}" --init-groups \
+      env \
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+        HOME=/var/lib/CodeMeter \
+        USER=daemon \
+        LOGNAME=daemon \
+        AFL_PRELOAD="${HARNESS_SO}" \
+        CM_AFL_HARNESS_MODE="${MODE}" \
+        CM_AFL_NET_TRANSPORT="${CM_AFL_NET_TRANSPORT}" \
+        AFL_NO_FORKSRV=1 \
+        AFL_NO_AFFINITY=1 \
+        AFL_SKIP_CPUFREQ=1 \
+        AFL_QEMU_INST_RANGES="${INST_RANGES}" \
+        "${AFLPP_ROOT}/afl-fuzz" \
+        -Q \
+        -t "${TIMEOUT_MS}" \
+        -m none \
+        "${ROLE_ARGS[@]}" \
+        -i "${CORPUS_DIR}" \
+        -o "${SYNC_DIR}" \
+        -- \
+        "${CODEMETER_BIN}" @@ \
+        >"${WORKER_LOG}" 2>&1 < /dev/null &
+fi
 AFL_PID=$!
 
 cleanup() {
@@ -109,14 +134,14 @@ PERMS_PID=$!
 
 WORKER_DIR="$SYNC_DIR/$WORKER_ID"
 READY=0
-for _ in $(seq 1 240); do
+for _ in $(seq 1 840); do
     if ! kill -0 "$AFL_PID" 2>/dev/null; then
         echo "ERROR: afl-fuzz exited before readiness; see $WORKER_LOG" >&2
         kill "$PERMS_PID" 2>/dev/null || true
         wait "$PERMS_PID" 2>/dev/null || true
         exit 4
     fi
-    if [ -f "$WORKER_DIR/fuzzer_setup" ] || [ -f "$WORKER_DIR/fuzzer_stats" ]; then
+    if [ -f "$WORKER_DIR/fuzzer_stats" ]; then
         READY=1
         break
     fi
@@ -124,7 +149,7 @@ for _ in $(seq 1 240); do
 done
 
 if [ "$READY" != "1" ]; then
-    echo "ERROR: AFL worker did not become ready within 120s; see $WORKER_LOG" >&2
+    echo "ERROR: AFL worker did not become ready within 420s; see $WORKER_LOG" >&2
     kill "$PERMS_PID" 2>/dev/null || true
     wait "$PERMS_PID" 2>/dev/null || true
     cleanup

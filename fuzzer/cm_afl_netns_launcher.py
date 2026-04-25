@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -102,7 +103,7 @@ def spawn_worker(worker: dict[str, Any], args: argparse.Namespace) -> subprocess
         "CPU_CORE": str(worker["cpu_core"]),
     })
 
-    log_fh = worker["ns_log"].open("wb")
+    log_fh = worker["ns_log"].open("ab")
     cmd = [
         "unshare",
         "--fork", "--kill-child=SIGINT",
@@ -163,6 +164,58 @@ def stop_worker(worker: dict[str, Any], grace: float = 15.0) -> None:
         worker["log_fh"].close()
     except Exception:
         pass
+
+
+def reset_worker_runtime_state(worker: dict[str, Any]) -> None:
+    if worker["ready_file"].exists():
+        worker["ready_file"].unlink()
+    worker_sync_dir = worker["sync_dir"] / worker["worker_id"]
+    if worker_sync_dir.exists():
+        shutil.rmtree(worker_sync_dir)
+
+
+def launch_worker(worker: dict[str, Any], args: argparse.Namespace, *, reason: str) -> bool:
+    total_attempts = args.max_retries + 1
+
+    while worker["attempts_started"] < total_attempts:
+        worker["attempts_started"] += 1
+        attempt = worker["attempts_started"]
+
+        build_farm_root(worker["farm_root"])
+        reset_worker_runtime_state(worker)
+        spawn_worker(worker, args)
+
+        if wait_for_ready(worker, args.ready_timeout):
+            worker["failed_permanently"] = False
+            worker["last_error"] = None
+            if attempt > 1:
+                print(
+                    f"[retry] worker recovered: {worker['worker_id']} "
+                    f"attempt={attempt}/{total_attempts} reason={reason}"
+                )
+            return True
+
+        rc = worker["proc"].poll()
+        stop_worker(worker)
+        worker["last_error"] = f"{reason} rc={rc}"
+
+        if attempt < total_attempts:
+            print(
+                f"[retry] worker restart scheduled: {worker['worker_id']} "
+                f"attempt={attempt}/{total_attempts} reason={reason} rc={rc}"
+            )
+            time.sleep(args.retry_delay)
+            continue
+
+        worker["failed_permanently"] = True
+        print(
+            f"[warn] worker quarantined after retries: {worker['worker_id']} "
+            f"attempts={attempt}/{total_attempts} reason={reason} rc={rc}"
+        )
+        return False
+
+    worker["failed_permanently"] = True
+    return False
 
 
 def build_assets_and_corpora(args: argparse.Namespace) -> None:
@@ -233,6 +286,9 @@ def make_workers(args: argparse.Namespace, out_root: Path, root_dir: Path) -> li
                 "ready_file": out_dir / "ready",
                 "inst_ranges": inst_ranges_for(mode),
                 "cpu_core": pick_cpu(idx),
+                "attempts_started": 0,
+                "failed_permanently": False,
+                "last_error": None,
             })
             idx += 1
     return workers
@@ -247,10 +303,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--init-script", type=Path, default=DEFAULT_INIT)
     ap.add_argument("--codemeter-bin", type=Path, default=Path("/usr/sbin/CodeMeterLin"))
     ap.add_argument("--aflpp-root", type=Path, default=Path("/home/avj/clones/AFLplusplus"))
-    ap.add_argument("--timeout-ms", default="30000+")
+    ap.add_argument("--timeout-ms", default="300000+")
+    ap.add_argument("--max-retries", type=int, default=5)
+    ap.add_argument("--retry-delay", type=float, default=5.0)
     ap.add_argument("--single-seed-name", default=None,
                     help="if set, use only this seed filename from each mode corpus")
-    ap.add_argument("--ready-timeout", type=float, default=120.0)
+    ap.add_argument("--ready-timeout", type=float, default=420.0)
     ap.add_argument("--wall-clock", type=int, default=0,
                     help="seconds to run before stopping; 0 means run until interrupted")
     return ap.parse_args()
@@ -275,16 +333,13 @@ def main() -> int:
                 f"  {worker['worker_id']}: mode={worker['mode']} role={worker['role']} "
                 f"cpu={worker['cpu_core']} root={worker['farm_root']}"
             )
-            build_farm_root(worker["farm_root"])
-            if worker["ready_file"].exists():
-                worker["ready_file"].unlink()
-            spawn_worker(worker, args)
-            if not wait_for_ready(worker, args.ready_timeout):
-                raise RuntimeError(f"worker did not become ready: {worker['worker_id']} ({worker['mode']})")
+            launch_worker(worker, args, reason="initial_start")
         json_write(out_root / "launcher_config.json", {
             "modes": args.modes,
             "workers_per_mode": args.workers_per_mode,
             "timeout_ms": args.timeout_ms,
+            "max_retries": args.max_retries,
+            "retry_delay": args.retry_delay,
             "wall_clock": args.wall_clock,
             "workers": [
                 {
@@ -295,25 +350,43 @@ def main() -> int:
                     "sync_dir": str(w["sync_dir"]),
                     "log_path": str(w["log_path"]),
                     "ns_log": str(w["ns_log"]),
+                    "attempts_started": w["attempts_started"],
+                    "failed_permanently": w["failed_permanently"],
+                    "last_error": w["last_error"],
                 }
                 for w in workers
             ],
         })
-        print(f"[run] all workers ready; out_root={out_root}")
+        alive_workers = [w for w in workers if not w["failed_permanently"]]
+        if not alive_workers:
+            raise RuntimeError("no workers survived initial startup")
+        print(f"[run] startup complete; alive={len(alive_workers)}/{len(workers)} out_root={out_root}")
 
         if args.wall_clock > 0:
             deadline = time.monotonic() + args.wall_clock
             while time.monotonic() < deadline:
                 for worker in workers:
+                    if worker["failed_permanently"]:
+                        continue
                     if worker["proc"].poll() is not None:
-                        raise RuntimeError(f"worker exited early: {worker['worker_id']} rc={worker['proc'].returncode}")
+                        rc = worker["proc"].returncode
+                        stop_worker(worker)
+                        launch_worker(worker, args, reason=f"early_exit rc={rc}")
+                if not any(not w["failed_permanently"] and w["proc"].poll() is None for w in workers):
+                    raise RuntimeError("no workers remain alive")
                 time.sleep(5)
             print("[run] wall-clock reached; stopping")
         else:
             while True:
                 for worker in workers:
+                    if worker["failed_permanently"]:
+                        continue
                     if worker["proc"].poll() is not None:
-                        raise RuntimeError(f"worker exited early: {worker['worker_id']} rc={worker['proc'].returncode}")
+                        rc = worker["proc"].returncode
+                        stop_worker(worker)
+                        launch_worker(worker, args, reason=f"early_exit rc={rc}")
+                if not any(not w["failed_permanently"] and w["proc"].poll() is None for w in workers):
+                    raise RuntimeError("no workers remain alive")
                 time.sleep(5)
     except KeyboardInterrupt:
         print("[stop] interrupted; stopping workers")
