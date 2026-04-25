@@ -16,7 +16,7 @@ written up in a form that can be extracted for vendor triage.
 
 ## Current State
 
-As of 2026-04-24, the client-facing SAMC work still has one confirmed
+As of 2026-04-25, the client-facing SAMC work still has one confirmed
 network-reachable crash class:
 
 ```text
@@ -57,7 +57,7 @@ the first deterministic reduced trigger, but the later prefix campaign showed
 that the random-looking tail is not special. The current default HELLO
 reproducer uses the simpler zero-tail prefix `5e00000000`.
 
-Since the original vendor-style writeup, two additional results matter:
+Since the original vendor-style writeup, three additional results matter:
 
 - the in-process AFL++/QEMU harness for the `0x5e` parser path is now working,
   but its first saved crashes minimized back to the same known `0x8f431d`
@@ -68,7 +68,17 @@ Since the original vendor-style writeup, two additional results matter:
   useful for hot-path discovery, but the current packet-translatable direction
   is the newer network-faithful `net_*` AFL/QEMU harness family plus the
   namespaced weekend launchers in `fuzzer/run_cm_afl_netns_weekend.sh` and
-  `fuzzer/run_cm_afl_netns_weekend6.sh`.
+  `fuzzer/run_cm_afl_netns_weekend6.sh`; and
+- the packet-faithful `net_*` family now also includes second-stage stateful
+  modes built from captured `access/access2 -> op -> release` conversations:
+  `public-key`, `calc-sig`, `crypt2`, `validate-signedtime`,
+  `validate-signedlist`, `validate-deletefi`, `lt-create-context`,
+  `lt-import-update`, and `lt-cleanup`. Those modes reuse the existing
+  token+SID patch model and are exercised through the new namespaced wrappers
+  in `fuzzer/run_cm_afl_netns_smoke18_stateful.sh`,
+  `fuzzer/run_cm_afl_netns_weekend12_stateful.sh`,
+  `fuzzer/run_cm_afl_netns_weekend9_stateful_access.sh`, and
+  `fuzzer/run_cm_afl_netns_weekend9_stateful_access2.sh`.
 
 Those newer findings are documented in `AFL_QEMU_NATIVE_FUZZING.md`.
 

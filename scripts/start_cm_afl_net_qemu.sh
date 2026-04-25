@@ -9,7 +9,7 @@ shift || true
 
 case "${MODE}" in
   net_get_servers) INST_RANGES_DEFAULT="0x548000-0x889000" ;;
-  net_access|net_access2|net_version|net_info_system|net_info_version)
+  net_*)
     INST_RANGES_DEFAULT="0x564000-0xbf1000"
     ;;
   *) echo "unknown net mode: ${MODE}" >&2; exit 2 ;;

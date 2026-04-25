@@ -78,7 +78,7 @@ def build_farm_root(farm_root: Path) -> None:
 def inst_ranges_for(mode: str) -> str:
     if mode == "net_get_servers":
         return "0x548000-0x889000"
-    if mode in {"net_access", "net_access2", "net_version", "net_info_system", "net_info_version"}:
+    if mode.startswith("net_"):
         return "0x564000-0xbf1000"
     raise ValueError(f"unknown mode: {mode}")
 

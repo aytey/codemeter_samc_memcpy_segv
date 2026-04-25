@@ -701,7 +701,8 @@ The current launcher behavior that actually passes smoke is:
 - one distinct host CPU per worker via `taskset`;
 - `AFL_NO_AFFINITY=1` inside the worker so AFL does not repin everything back
   onto core `0`; and
-- the normal AFL/QEMU forkserver kept enabled.
+- the later stable path also forces `AFL_NO_FORKSRV=1` together with a
+  `base.bin`-only startup corpus.
 
 The current recommended weekend wrapper is:
 
@@ -736,22 +737,185 @@ Those cover:
 
 and use the same sequential launcher path.
 
+### Stable namespaced baseline
+
+The later stable namespaced net path changed in three important ways:
+
+- `base.bin` is the only startup seed;
+- `AFL_NO_FORKSRV=1` is set inside `fuzzer/cm_afl_netns_init.sh`; and
+- readiness is based on real `fuzzer_stats`, not just `fuzzer_setup`.
+
+The committed six-mode weekend wrapper is now:
+
+```bash
+bash fuzzer/run_cm_afl_netns_weekend6.sh
+```
+
+That launches:
+
+- `net_access`
+- `net_access2`
+- `net_version`
+- `net_info_system`
+- `net_info_version`
+- `net_get_servers`
+
+at `4` workers per mode (`24` total) with:
+
+- `--timeout-ms 300000+`
+- `--max-retries 5`
+- `--single-seed-name base.bin`
+
+### Stateful `access/access2 -> op -> release` modes
+
+The next packet-faithful expansion does not require a new reply extractor yet.
+The captured public SDK second-stage conversations under
+`/tmp/cm_sdk_api_sweep/frames` already have a consistent shape:
+
+1. `access` or `access2`
+2. short reply containing the SID
+3. operation frame carrying the SID at bytes `[4:8]`
+4. operation reply
+5. `0x0b` release carrying the same SID at bytes `[4:8]`
+
+That means the existing token+SID patch model is already enough for a useful
+first wave of deeper network-faithful `net_*` modes.
+
+Added stateful modes:
+
+- `net_access_public_key`
+- `net_access_calc_sig`
+- `net_access_crypt2`
+- `net_access_validate_signedtime`
+- `net_access_validate_signedlist`
+- `net_access_validate_deletefi`
+- `net_access_lt_create_context`
+- `net_access_lt_import_update`
+- `net_access_lt_cleanup`
+- `net_access2_public_key`
+- `net_access2_calc_sig`
+- `net_access2_crypt2`
+- `net_access2_validate_signedtime`
+- `net_access2_validate_signedlist`
+- `net_access2_validate_deletefi`
+- `net_access2_lt_create_context`
+- `net_access2_lt_import_update`
+- `net_access2_lt_cleanup`
+
+These are now first-class inputs to:
+
+- `scripts/build_cm_afl_net_assets.py`
+- `scripts/build_cm_afl_net_corpus.py`
+- `scripts/run_cm_afl_net_showmap.sh`
+- `scripts/start_cm_afl_net_qemu.sh`
+- `fuzzer/cm_afl_netns_launcher.py`
+
+Representative `afl-showmap` proofs that completed cleanly on the new slice:
+
+- `net_access_public_key`
+  - map hash `967e36826fffad7`
+  - `45233` tuples
+- `net_access2_lt_import_update`
+  - map hash `e2b73d18e5831ec3`
+  - `45122` tuples
+
+The broad smoke wrapper is:
+
+```bash
+bash fuzzer/run_cm_afl_netns_smoke18_stateful.sh
+```
+
+It launches all `18` modes with:
+
+- `1` worker per mode
+- `base.bin` only startup seed
+- `300000+` timeout
+- `5` retries
+
+The first-wave 24-worker weekend wrapper is narrower on purpose:
+
+```bash
+bash fuzzer/run_cm_afl_netns_weekend12_stateful.sh
+```
+
+That runs the strongest `12` first-wave modes at `2` workers each:
+
+- `net_access_public_key`
+- `net_access_calc_sig`
+- `net_access_crypt2`
+- `net_access_validate_signedtime`
+- `net_access_lt_create_context`
+- `net_access_lt_import_update`
+- `net_access2_public_key`
+- `net_access2_calc_sig`
+- `net_access2_crypt2`
+- `net_access2_validate_signedtime`
+- `net_access2_lt_create_context`
+- `net_access2_lt_import_update`
+
+For a two-host split, use the `9x3` wrappers instead:
+
+```bash
+bash fuzzer/run_cm_afl_netns_weekend9_stateful_access.sh
+bash fuzzer/run_cm_afl_netns_weekend9_stateful_access2.sh
+```
+
+Both delegate to:
+
+```bash
+bash fuzzer/run_cm_afl_netns_group.sh OUT_PREFIX MODE...
+```
+
+and keep the same namespaced net baseline:
+
+- `3` workers per mode
+- `base.bin` only startup seed
+- `300000+` timeout
+- `5` retries
+
+As of the 2026-04-25 smoke run, the 18-mode stateful startup had already
+cleared real readiness across the full set, which is the threshold needed
+before replacing the older six-mode weekend campaign with the split stateful
+runs.
+
+### Queue sampling
+
+To estimate how often a live `net_*` queue is producing decryptable structured
+replies instead of shallow rejects, use:
+
+```bash
+sudo -n python3 scripts/sample_net_queue_replies.py \
+  --run-root /home/avj/clones/ax_fuzz/output/<live_run_root> \
+  --samples-per-mode 5 \
+  --parallel 2
+```
+
+This helper replays saved queue entries in throwaway namespaces and buckets the
+result as:
+
+- `structured_reply`
+- `no_reply_or_timeout`
+- `crash`
+- `infra_error`
+
 ### Timeout note
 
 The first 18-worker launch failed during AFL dry-run calibration because the
 older timeout was too small for the namespaced network-faithful path. The
 working default is now:
 
-- `--timeout-ms 60000+`
+- `--timeout-ms 300000+`
 
-The current namespaced net launch path also keeps the normal AFL/QEMU
-forkserver enabled. For these `net_*` modes, forcing `AFL_NO_FORKSRV=1`
-regresses dry-run calibration back to all-timeout aborts even with the longer
-timeout.
+The current stable namespaced net launch path also uses `AFL_NO_FORKSRV=1`,
+`base.bin`-only startup, and worker retries. Earlier runs that combined
+multiple startup seeds with shorter timeouts were the ones that wedged in
+dry-run calibration.
 
 The current launcher also passed:
 
 - a 6-mode / 6-worker smoke (`1` worker per mode); and
-- a 6-mode / 12-worker smoke (`2` workers per mode)
+- a 6-mode / 12-worker smoke (`2` workers per mode);
+- a 6-mode / 24-worker stable weekend launch (`4` workers per mode); and
+- an 18-mode stateful smoke (`1` worker per mode)
 
-under the sequential-start / `60000+` configuration.
+under the sequential-start / `300000+` / `base.bin`-only configuration.

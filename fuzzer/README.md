@@ -26,8 +26,14 @@ current crash story and campaign chronology.
 | `cm_afl_netns_init.sh` | PID-1 init for one namespaced AFL/QEMU network-faithful worker |
 | `cm_afl_netns_launcher.py` | multi-worker namespace launcher for the network-faithful `net_*` AFL/QEMU modes |
 | `run_cm_afl_netns_smoke6.sh` | six-mode namespaced smoke wrapper (`1` worker per mode) |
-| `run_cm_afl_netns_weekend6.sh` | six-mode namespaced weekend wrapper (`3` workers per mode) |
+| `run_cm_afl_netns_weekend6.sh` | six-mode namespaced weekend wrapper (`4` workers per mode) |
 | `run_cm_afl_netns_weekend.sh` | 18-worker weekend wrapper for the recommended `net_*` modes |
+| `run_cm_afl_netns_smoke18_stateful.sh` | 18-mode stateful smoke wrapper (`1` worker per mode) for second-stage `access/access2` flows |
+| `run_cm_afl_netns_weekend12_stateful.sh` | 12-mode first-wave stateful weekend wrapper (`2` workers per mode) |
+| `run_cm_afl_netns_group.sh` | generic namespaced group launcher for an arbitrary `net_*` mode list (`3` workers per mode) |
+| `run_cm_afl_netns_weekend9_stateful_access.sh` | 9-mode access-side stateful weekend wrapper (`3` workers per mode) |
+| `run_cm_afl_netns_weekend9_stateful_access2.sh` | 9-mode access2-side stateful weekend wrapper (`3` workers per mode) |
+| `sample_net_queue_replies.py` | isolated queue sampler that replays saved `net_*` queue files and buckets reply/crash outcomes |
 | `remote_cm_fuzz_launcher.py` | remote daemon-to-server protocol fuzzer with SSH-based target crash monitoring |
 | `samc_veth_farm_launcher.py` | local multi-daemon farm where fuzz traffic reaches each daemon over a veth address, not loopback |
 | `samc_veth_target_init.sh` | target-only namespace init used by `samc_veth_farm_launcher.py` |
@@ -151,7 +157,7 @@ Do not spend first-class weekend workers on `net_access` or `net_access2`
 yet. On the current validated seeds they collapse to the same coverage
 fingerprint as `net_info_system`.
 
-The weekend wrapper is:
+The narrower three-mode weekend wrapper is:
 
 ```bash
 bash fuzzer/run_cm_afl_netns_weekend.sh
@@ -164,13 +170,15 @@ That launches `18` namespaced workers total:
 - `6` for `net_version`
 
 Each worker gets a private network/filesystem namespace, so the host
-`codemeter` service can remain active. The working launcher path now starts
-workers sequentially, pins each worker to a distinct host CPU with `taskset`,
-and sets `AFL_NO_AFFINITY=1` so AFL does not repin them back onto core `0`.
-Use `--timeout-ms 60000+`; the earlier shorter timeout caused AFL dry-run
-calibration failures in the namespaced net path. Keep the normal QEMU
-forkserver enabled for the `net_*` workers; forcing `AFL_NO_FORKSRV=1`
-regresses those same namespaced dry runs back to all-timeout abort behavior.
+`codemeter` service can remain active. The current working launcher path:
+
+- starts workers sequentially;
+- pins each worker to a distinct host CPU with `taskset`;
+- sets `AFL_NO_AFFINITY=1` so AFL does not repin them back onto core `0`;
+- uses `AFL_NO_FORKSRV=1` for the stable namespaced net path;
+- waits for real `fuzzer_stats`, not just `fuzzer_setup`; and
+- uses `base.bin` as the only startup seed together with `--timeout-ms 300000+`
+  and `--max-retries 5`.
 
 For maximum packet-surface spread, the broader six-mode wrappers are:
 
@@ -187,6 +195,74 @@ Those cover:
 - `net_info_system`
 - `net_info_version`
 - `net_get_servers`
+
+The current stable six-mode weekend wrapper is therefore:
+
+```bash
+bash fuzzer/run_cm_afl_netns_weekend6.sh
+```
+
+That runs `24` workers total (`4` per mode) with the same namespaced net
+baseline above.
+
+The next packet-faithful expansion is a stateful second-stage `net_*` family
+built from captured `access/access2 -> op -> release` conversations. These
+reuse the same token+SID patch model as the existing `net_version` /
+`net_info_*` flows; the mutated frame is simply the middle operation frame.
+
+Current stateful modes:
+
+- `net_access_public_key`
+- `net_access_calc_sig`
+- `net_access_crypt2`
+- `net_access_validate_signedtime`
+- `net_access_validate_signedlist`
+- `net_access_validate_deletefi`
+- `net_access_lt_create_context`
+- `net_access_lt_import_update`
+- `net_access_lt_cleanup`
+- `net_access2_public_key`
+- `net_access2_calc_sig`
+- `net_access2_crypt2`
+- `net_access2_validate_signedtime`
+- `net_access2_validate_signedlist`
+- `net_access2_validate_deletefi`
+- `net_access2_lt_create_context`
+- `net_access2_lt_import_update`
+- `net_access2_lt_cleanup`
+
+Useful wrappers for that slice:
+
+```bash
+bash fuzzer/run_cm_afl_netns_smoke18_stateful.sh
+bash fuzzer/run_cm_afl_netns_weekend12_stateful.sh
+bash fuzzer/run_cm_afl_netns_weekend9_stateful_access.sh
+bash fuzzer/run_cm_afl_netns_weekend9_stateful_access2.sh
+```
+
+The `9x3` wrappers are intended for a two-host split and both delegate to:
+
+```bash
+bash fuzzer/run_cm_afl_netns_group.sh OUT_PREFIX MODE...
+```
+
+That generic launcher keeps the same namespaced net baseline:
+
+- `base.bin` only startup corpus
+- `300000+` timeout
+- `5` retries
+- `3` workers per mode
+
+To estimate how much of a live `net_*` campaign is producing decryptable
+structured replies rather than shallow rejects, sample saved queue entries in
+throwaway namespaces:
+
+```bash
+sudo -n python3 scripts/sample_net_queue_replies.py \
+  --run-root /home/avj/clones/ax_fuzz/output/<live_run_root> \
+  --samples-per-mode 5 \
+  --parallel 2
+```
 
 ## Prerequisites
 
