@@ -12,7 +12,7 @@ OUT_PREFIX="$1"
 shift
 MODES=("$@")
 
-exec sudo -n python3 "${ROOT}/fuzzer/cm_afl_netns_launcher.py" \
+exec sudo -n --preserve-env=CM_AFL_NET_MUTATION_STYLE python3 "${ROOT}/fuzzer/cm_afl_netns_launcher.py" \
   --modes "${MODES[@]}" \
   --workers-per-mode 3 \
   --timeout-ms 300000+ \
