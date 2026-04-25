@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+export CM_AFL_NET_MUTATION_STYLE=structured
+
 exec "${ROOT}/fuzzer/run_cm_afl_netns_group.sh" \
   cm_afl_netns_weekend9_stateful_access2 \
   net_access2_public_key \

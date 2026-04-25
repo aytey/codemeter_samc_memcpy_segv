@@ -687,6 +687,82 @@ static void cm_patch_sid(
     }
 }
 
+static int cm_use_structured_mutation(void) {
+    const char *style = getenv("CM_AFL_NET_MUTATION_STYLE");
+    if (!style || !*style) {
+        return 0;
+    }
+    if (strcmp(style, "structured") == 0 || strcmp(style, "fixed") == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static unsigned char *cm_build_mutated_frame(
+    const struct cm_net_mode_asset *mode,
+    const struct cm_net_frame_asset *asset,
+    const unsigned char *input,
+    size_t input_len,
+    size_t frame_index,
+    size_t *frame_len_out
+) {
+    unsigned char *frame;
+    size_t frame_len;
+
+    if (!(frame_index == mode->mutate_index && input && input_len)) {
+        frame_len = asset->len;
+        frame = (unsigned char *)malloc(frame_len ? frame_len : 1);
+        if (!frame) {
+            die_errno("malloc(net_frame)");
+        }
+        if (frame_len) {
+            memcpy(frame, asset->data, frame_len);
+        }
+        *frame_len_out = frame_len;
+        return frame;
+    }
+
+    if (!cm_use_structured_mutation() || !mode->mutate_fixed_len) {
+        frame_len = input_len;
+        frame = (unsigned char *)malloc(frame_len ? frame_len : 1);
+        if (!frame) {
+            die_errno("malloc(net_frame)");
+        }
+        if (frame_len) {
+            memcpy(frame, input, frame_len);
+        }
+        *frame_len_out = frame_len;
+        return frame;
+    }
+
+    frame_len = asset->len;
+    frame = (unsigned char *)malloc(frame_len ? frame_len : 1);
+    if (!frame) {
+        die_errno("malloc(net_frame)");
+    }
+    if (frame_len) {
+        size_t i;
+        size_t prefix = mode->mutate_preserve_prefix;
+        size_t suffix = mode->mutate_preserve_suffix;
+        size_t mutable_end;
+
+        memcpy(frame, asset->data, frame_len);
+        if (prefix > frame_len) {
+            prefix = frame_len;
+        }
+        if (suffix > frame_len - prefix) {
+            suffix = frame_len - prefix;
+        }
+        mutable_end = frame_len - suffix;
+
+        for (i = prefix; i < mutable_end && i < input_len; i++) {
+            frame[i] = input[i];
+        }
+    }
+    *frame_len_out = frame_len;
+    return frame;
+}
+
 static void cm_free_reply_cache(unsigned char **replies) {
     size_t i;
     for (i = 0; i < 16; i++) {
@@ -725,7 +801,6 @@ static void *cm_net_sender_thread(void *opaque) {
 
     for (i = 0; i < args->mode->frame_count; i++) {
         const struct cm_net_frame_asset *asset = &args->mode->frames[i];
-        const unsigned char *src = asset->data;
         size_t frame_len = asset->len;
         unsigned char *frame;
         unsigned char *wire;
@@ -736,19 +811,9 @@ static void *cm_net_sender_thread(void *opaque) {
         unsigned char *reply_pt;
         size_t reply_pt_len = 0;
 
-        if (i == args->mode->mutate_index && args->input && args->input_len) {
-            src = args->input;
-            frame_len = args->input_len;
-        }
-        frame = (unsigned char *)malloc(frame_len ? frame_len : 1);
-        if (!frame) {
-            close(fd);
-            cm_free_reply_cache(replies);
-            die_errno("malloc(net_frame)");
-        }
-        if (frame_len) {
-            memcpy(frame, src, frame_len);
-        }
+        frame = cm_build_mutated_frame(
+            args->mode, asset, args->input, args->input_len, i, &frame_len
+        );
         cm_patch_token(frame, frame_len, args->mode, i, token);
         cm_patch_sid(frame, frame_len, args->mode, i, replies, reply_lens);
         now_t = (uint32_t)time(NULL);

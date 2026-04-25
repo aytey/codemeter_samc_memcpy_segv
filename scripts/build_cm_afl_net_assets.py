@@ -15,6 +15,9 @@ MODE_SPECS = {
     "net_get_servers": {
         "frame_file": "get_servers.json",
         "mutate_index": 0,
+        "mutate_fixed_len": 0,
+        "mutate_preserve_prefix": 0,
+        "mutate_preserve_suffix": 0,
         "token_frame": -1,
         "token_offset": 0,
         "token_len": 0,
@@ -23,6 +26,9 @@ MODE_SPECS = {
     "net_access": {
         "frame_file": "access_local_subsystem.json",
         "mutate_index": 0,
+        "mutate_fixed_len": 0,
+        "mutate_preserve_prefix": 0,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -31,6 +37,9 @@ MODE_SPECS = {
     "net_access2": {
         "frame_file": "access2_local_subsystem.json",
         "mutate_index": 0,
+        "mutate_fixed_len": 0,
+        "mutate_preserve_prefix": 0,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -39,6 +48,9 @@ MODE_SPECS = {
     "net_version": {
         "frame_file": "access_version_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 0,
+        "mutate_preserve_prefix": 0,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -47,6 +59,9 @@ MODE_SPECS = {
     "net_info_system": {
         "frame_file": "access_info_system_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 0,
+        "mutate_preserve_prefix": 0,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -55,6 +70,9 @@ MODE_SPECS = {
     "net_info_version": {
         "frame_file": "access_info_version_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 0,
+        "mutate_preserve_prefix": 0,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -63,6 +81,9 @@ MODE_SPECS = {
     "net_access_public_key": {
         "frame_file": "access_public_key_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -71,6 +92,9 @@ MODE_SPECS = {
     "net_access_calc_sig": {
         "frame_file": "access_calc_sig_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -79,6 +103,9 @@ MODE_SPECS = {
     "net_access_crypt2": {
         "frame_file": "access_crypt2_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -87,6 +114,9 @@ MODE_SPECS = {
     "net_access_validate_signedtime": {
         "frame_file": "access_validate_signedtime_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -95,6 +125,9 @@ MODE_SPECS = {
     "net_access_validate_signedlist": {
         "frame_file": "access_validate_signedlist_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -103,6 +136,9 @@ MODE_SPECS = {
     "net_access_validate_deletefi": {
         "frame_file": "access_validate_deletefi_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -111,6 +147,9 @@ MODE_SPECS = {
     "net_access_lt_create_context": {
         "frame_file": "access_lt_create_context_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -119,6 +158,9 @@ MODE_SPECS = {
     "net_access_lt_import_update": {
         "frame_file": "access_lt_import_update_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 16,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -127,6 +169,9 @@ MODE_SPECS = {
     "net_access_lt_cleanup": {
         "frame_file": "access_lt_cleanup_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 0x1C,
         "token_len": 4,
@@ -135,6 +180,9 @@ MODE_SPECS = {
     "net_access2_public_key": {
         "frame_file": "access2_public_key_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -143,6 +191,9 @@ MODE_SPECS = {
     "net_access2_calc_sig": {
         "frame_file": "access2_calc_sig_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -151,6 +202,9 @@ MODE_SPECS = {
     "net_access2_crypt2": {
         "frame_file": "access2_crypt2_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -159,6 +213,9 @@ MODE_SPECS = {
     "net_access2_validate_signedtime": {
         "frame_file": "access2_validate_signedtime_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -167,6 +224,9 @@ MODE_SPECS = {
     "net_access2_validate_signedlist": {
         "frame_file": "access2_validate_signedlist_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -175,6 +235,9 @@ MODE_SPECS = {
     "net_access2_validate_deletefi": {
         "frame_file": "access2_validate_deletefi_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -183,6 +246,9 @@ MODE_SPECS = {
     "net_access2_lt_create_context": {
         "frame_file": "access2_lt_create_context_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -191,6 +257,9 @@ MODE_SPECS = {
     "net_access2_lt_import_update": {
         "frame_file": "access2_lt_import_update_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 16,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -199,6 +268,9 @@ MODE_SPECS = {
     "net_access2_lt_cleanup": {
         "frame_file": "access2_lt_cleanup_local_subsystem.json",
         "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
         "token_frame": 0,
         "token_offset": 472,
         "token_len": 4,
@@ -262,6 +334,9 @@ def main() -> int:
     lines.append("    size_t frame_count;")
     lines.append("    const struct cm_net_frame_asset *frames;")
     lines.append("    size_t mutate_index;")
+    lines.append("    int mutate_fixed_len;")
+    lines.append("    size_t mutate_preserve_prefix;")
+    lines.append("    size_t mutate_preserve_suffix;")
     lines.append("    int token_frame;")
     lines.append("    size_t token_offset;")
     lines.append("    size_t token_len;")
@@ -310,6 +385,9 @@ def main() -> int:
         lines.append(f"    .frame_count = {len(frames)},")
         lines.append(f"    .frames = cm_net_{mode_name}_frames,")
         lines.append(f"    .mutate_index = {spec['mutate_index']},")
+        lines.append(f"    .mutate_fixed_len = {spec['mutate_fixed_len']},")
+        lines.append(f"    .mutate_preserve_prefix = {spec['mutate_preserve_prefix']},")
+        lines.append(f"    .mutate_preserve_suffix = {spec['mutate_preserve_suffix']},")
         lines.append(f"    .token_frame = {spec['token_frame']},")
         lines.append(f"    .token_offset = {spec['token_offset']},")
         lines.append(f"    .token_len = {spec['token_len']},")
