@@ -27,6 +27,7 @@ set -euo pipefail
 : "${INST_RANGES:?}"
 : "${TIMEOUT_MS:=8000+}"
 : "${CM_AFL_NET_TRANSPORT:=tcp}"
+: "${CM_AFL_NET_MUTATION_STYLE:=}"
 : "${CPU_CORE:=}"
 
 if [ "$$" != "1" ]; then
@@ -75,6 +76,7 @@ if [ -n "${CPU_CORE}" ]; then
         AFL_PRELOAD="${HARNESS_SO}" \
         CM_AFL_HARNESS_MODE="${MODE}" \
         CM_AFL_NET_TRANSPORT="${CM_AFL_NET_TRANSPORT}" \
+        CM_AFL_NET_MUTATION_STYLE="${CM_AFL_NET_MUTATION_STYLE}" \
         AFL_NO_FORKSRV=1 \
         AFL_NO_AFFINITY=1 \
         AFL_SKIP_CPUFREQ=1 \
@@ -100,6 +102,7 @@ else
         AFL_PRELOAD="${HARNESS_SO}" \
         CM_AFL_HARNESS_MODE="${MODE}" \
         CM_AFL_NET_TRANSPORT="${CM_AFL_NET_TRANSPORT}" \
+        CM_AFL_NET_MUTATION_STYLE="${CM_AFL_NET_MUTATION_STYLE}" \
         AFL_NO_FORKSRV=1 \
         AFL_NO_AFFINITY=1 \
         AFL_SKIP_CPUFREQ=1 \
