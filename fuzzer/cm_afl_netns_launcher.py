@@ -283,6 +283,7 @@ def snapshot_run_artifacts(out_root: Path, args: argparse.Namespace) -> None:
             "max_retries": args.max_retries,
             "retry_delay": args.retry_delay,
             "single_seed_name": args.single_seed_name,
+            "skip_build": args.skip_build,
             "wall_clock": args.wall_clock,
         },
     )
@@ -369,6 +370,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--retry-delay", type=float, default=5.0)
     ap.add_argument("--single-seed-name", default=None,
                     help="if set, use only this seed filename from each mode corpus")
+    ap.add_argument("--skip-build", action="store_true",
+                    help="reuse the current harness and seed directories instead of rebuilding them")
     ap.add_argument("--ready-timeout", type=float, default=420.0)
     ap.add_argument("--wall-clock", type=int, default=0,
                     help="seconds to run before stopping; 0 means run until interrupted")
@@ -384,7 +387,8 @@ def main() -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     args.root.mkdir(parents=True, exist_ok=True)
 
-    build_assets_and_corpora(args)
+    if not args.skip_build:
+        build_assets_and_corpora(args)
     snapshot_run_artifacts(out_root, args)
     workers = make_workers(args, out_root, args.root)
 
@@ -402,6 +406,7 @@ def main() -> int:
             "timeout_ms": args.timeout_ms,
             "max_retries": args.max_retries,
             "retry_delay": args.retry_delay,
+            "skip_build": args.skip_build,
             "wall_clock": args.wall_clock,
             "workers": [
                 {
