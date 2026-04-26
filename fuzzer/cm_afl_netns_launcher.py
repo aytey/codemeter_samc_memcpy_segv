@@ -42,6 +42,11 @@ def json_write(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def capture_text(cmd: list[str]) -> str:
+    cp = sh(cmd, capture=True)
+    return cp.stdout
+
+
 def build_farm_root(farm_root: Path) -> None:
     if farm_root.exists():
         sh(["rm", "-rf", str(farm_root)])
@@ -90,7 +95,7 @@ def spawn_worker(worker: dict[str, Any], args: argparse.Namespace) -> subprocess
         "FARM_HOSTNAME": worker["hostname"],
         "CODEMETER_BIN": str(args.codemeter_bin),
         "AFLPP_ROOT": str(args.aflpp_root),
-        "HARNESS_SO": str(ROOT / "preload" / "cm_afl_harness.so"),
+        "HARNESS_SO": str(worker["harness_so"]),
         "MODE": worker["mode"],
         "CORPUS_DIR": str(worker["corpus_dir"]),
         "SYNC_DIR": str(worker["sync_dir"]),
@@ -229,6 +234,60 @@ def build_assets_and_corpora(args: argparse.Namespace) -> None:
         )
 
 
+def snapshot_run_artifacts(out_root: Path, args: argparse.Namespace) -> None:
+    snap = out_root / "run_artifacts"
+    snap.mkdir(parents=True, exist_ok=True)
+
+    files_to_copy = [
+        ROOT / "preload" / "cm_afl_harness.so",
+        ROOT / "preload" / "cm_afl_net_assets.h",
+        ROOT / "fuzzer" / "cm_afl_netns_init.sh",
+        ROOT / "fuzzer" / "cm_afl_netns_launcher.py",
+    ]
+    for src in files_to_copy:
+        if src.is_file():
+            shutil.copy2(src, snap / src.name)
+
+    manifest_targets = [
+        snap / "cm_afl_harness.so",
+        snap / "cm_afl_net_assets.h",
+        snap / "cm_afl_netns_init.sh",
+        snap / "cm_afl_netns_launcher.py",
+    ]
+    existing = [str(p) for p in manifest_targets if p.is_file()]
+    if existing:
+        (snap / "sha256sums.txt").write_text(
+            capture_text(["sha256sum", *existing]),
+            encoding="utf-8",
+        )
+
+    (snap / "git_head.txt").write_text(
+        capture_text(["git", "rev-parse", "HEAD"]),
+        encoding="utf-8",
+    )
+    (snap / "git_status.txt").write_text(
+        capture_text(["git", "status", "--short"]),
+        encoding="utf-8",
+    )
+    (snap / "git_diff_stat.txt").write_text(
+        capture_text(["git", "diff", "--stat"]),
+        encoding="utf-8",
+    )
+    json_write(
+        snap / "launch_env.json",
+        {
+            "CM_AFL_NET_MUTATION_STYLE": os.environ.get("CM_AFL_NET_MUTATION_STYLE"),
+            "modes": args.modes,
+            "workers_per_mode": args.workers_per_mode,
+            "timeout_ms": args.timeout_ms,
+            "max_retries": args.max_retries,
+            "retry_delay": args.retry_delay,
+            "single_seed_name": args.single_seed_name,
+            "wall_clock": args.wall_clock,
+        },
+    )
+
+
 def build_worker_corpus(mode: str, args: argparse.Namespace, out_root: Path) -> Path:
     source_dir = ROOT / "seeds" / f"cm_afl_{mode}"
     if not args.single_seed_name:
@@ -251,6 +310,7 @@ def make_workers(args: argparse.Namespace, out_root: Path, root_dir: Path) -> li
     workers: list[dict[str, Any]] = []
     idx = 0
     cpu_count = os.cpu_count() or 1
+    harness_snapshot = out_root / "run_artifacts" / "cm_afl_harness.so"
 
     def pick_cpu(slot: int) -> int:
         if cpu_count <= 1:
@@ -286,6 +346,7 @@ def make_workers(args: argparse.Namespace, out_root: Path, root_dir: Path) -> li
                 "ready_file": out_dir / "ready",
                 "inst_ranges": inst_ranges_for(mode),
                 "cpu_core": pick_cpu(idx),
+                "harness_so": harness_snapshot,
                 "attempts_started": 0,
                 "failed_permanently": False,
                 "last_error": None,
@@ -324,6 +385,7 @@ def main() -> int:
     args.root.mkdir(parents=True, exist_ok=True)
 
     build_assets_and_corpora(args)
+    snapshot_run_artifacts(out_root, args)
     workers = make_workers(args, out_root, args.root)
 
     try:
