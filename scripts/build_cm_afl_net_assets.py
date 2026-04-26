@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 from pathlib import Path
 import textwrap
@@ -9,6 +10,9 @@ import textwrap
 
 ROOT = Path(__file__).resolve().parents[1]
 FRAME_ROOT = Path("/tmp/cm_sdk_api_sweep/frames")
+
+
+CHAIN_SID_PATCHES = [(1, 0, 4), (2, 0, 4), (3, 0, 4), (4, 0, 4)]
 
 
 MODE_SPECS = {
@@ -177,6 +181,108 @@ MODE_SPECS = {
         "token_len": 4,
         "sid_patches": [(1, 0, 4), (2, 0, 4)],
     },
+    "net_access_authops_public_key": {
+        "frame_parts": [
+            ("access_public_key_local_subsystem.json", 0),
+            ("access_public_key_local_subsystem.json", 1),
+            ("access_calc_sig_local_subsystem.json", 1),
+            ("access_crypt2_local_subsystem.json", 1),
+            ("access_public_key_local_subsystem.json", 2),
+        ],
+        "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
+        "token_frame": 0,
+        "token_offset": 0x1C,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access_authops_calc_sig": {
+        "frame_parts": [
+            ("access_public_key_local_subsystem.json", 0),
+            ("access_public_key_local_subsystem.json", 1),
+            ("access_calc_sig_local_subsystem.json", 1),
+            ("access_crypt2_local_subsystem.json", 1),
+            ("access_public_key_local_subsystem.json", 2),
+        ],
+        "mutate_index": 2,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
+        "token_frame": 0,
+        "token_offset": 0x1C,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access_authops_crypt2": {
+        "frame_parts": [
+            ("access_public_key_local_subsystem.json", 0),
+            ("access_public_key_local_subsystem.json", 1),
+            ("access_calc_sig_local_subsystem.json", 1),
+            ("access_crypt2_local_subsystem.json", 1),
+            ("access_public_key_local_subsystem.json", 2),
+        ],
+        "mutate_index": 3,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 0x1C,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access_validate_chain_signedtime": {
+        "frame_parts": [
+            ("access_validate_signedtime_local_subsystem.json", 0),
+            ("access_validate_signedtime_local_subsystem.json", 1),
+            ("access_validate_signedlist_local_subsystem.json", 1),
+            ("access_validate_deletefi_local_subsystem.json", 1),
+            ("access_validate_signedtime_local_subsystem.json", 2),
+        ],
+        "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 0x1C,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access_validate_chain_signedlist": {
+        "frame_parts": [
+            ("access_validate_signedtime_local_subsystem.json", 0),
+            ("access_validate_signedtime_local_subsystem.json", 1),
+            ("access_validate_signedlist_local_subsystem.json", 1),
+            ("access_validate_deletefi_local_subsystem.json", 1),
+            ("access_validate_signedtime_local_subsystem.json", 2),
+        ],
+        "mutate_index": 2,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 0x1C,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access_validate_chain_deletefi": {
+        "frame_parts": [
+            ("access_validate_signedtime_local_subsystem.json", 0),
+            ("access_validate_signedtime_local_subsystem.json", 1),
+            ("access_validate_signedlist_local_subsystem.json", 1),
+            ("access_validate_deletefi_local_subsystem.json", 1),
+            ("access_validate_signedtime_local_subsystem.json", 2),
+        ],
+        "mutate_index": 3,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 0x1C,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
     "net_access2_public_key": {
         "frame_file": "access2_public_key_local_subsystem.json",
         "mutate_index": 1,
@@ -276,6 +382,108 @@ MODE_SPECS = {
         "token_len": 4,
         "sid_patches": [(1, 0, 4), (2, 0, 4)],
     },
+    "net_access2_authops_public_key": {
+        "frame_parts": [
+            ("access2_public_key_local_subsystem.json", 0),
+            ("access2_public_key_local_subsystem.json", 1),
+            ("access2_calc_sig_local_subsystem.json", 1),
+            ("access2_crypt2_local_subsystem.json", 1),
+            ("access2_public_key_local_subsystem.json", 2),
+        ],
+        "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
+        "token_frame": 0,
+        "token_offset": 472,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access2_authops_calc_sig": {
+        "frame_parts": [
+            ("access2_public_key_local_subsystem.json", 0),
+            ("access2_public_key_local_subsystem.json", 1),
+            ("access2_calc_sig_local_subsystem.json", 1),
+            ("access2_crypt2_local_subsystem.json", 1),
+            ("access2_public_key_local_subsystem.json", 2),
+        ],
+        "mutate_index": 2,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 4,
+        "token_frame": 0,
+        "token_offset": 472,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access2_authops_crypt2": {
+        "frame_parts": [
+            ("access2_public_key_local_subsystem.json", 0),
+            ("access2_public_key_local_subsystem.json", 1),
+            ("access2_calc_sig_local_subsystem.json", 1),
+            ("access2_crypt2_local_subsystem.json", 1),
+            ("access2_public_key_local_subsystem.json", 2),
+        ],
+        "mutate_index": 3,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 472,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access2_validate_chain_signedtime": {
+        "frame_parts": [
+            ("access2_validate_signedtime_local_subsystem.json", 0),
+            ("access2_validate_signedtime_local_subsystem.json", 1),
+            ("access2_validate_signedlist_local_subsystem.json", 1),
+            ("access2_validate_deletefi_local_subsystem.json", 1),
+            ("access2_validate_signedtime_local_subsystem.json", 2),
+        ],
+        "mutate_index": 1,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 472,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access2_validate_chain_signedlist": {
+        "frame_parts": [
+            ("access2_validate_signedtime_local_subsystem.json", 0),
+            ("access2_validate_signedtime_local_subsystem.json", 1),
+            ("access2_validate_signedlist_local_subsystem.json", 1),
+            ("access2_validate_deletefi_local_subsystem.json", 1),
+            ("access2_validate_signedtime_local_subsystem.json", 2),
+        ],
+        "mutate_index": 2,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 8,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 472,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
+    "net_access2_validate_chain_deletefi": {
+        "frame_parts": [
+            ("access2_validate_signedtime_local_subsystem.json", 0),
+            ("access2_validate_signedtime_local_subsystem.json", 1),
+            ("access2_validate_signedlist_local_subsystem.json", 1),
+            ("access2_validate_deletefi_local_subsystem.json", 1),
+            ("access2_validate_signedtime_local_subsystem.json", 2),
+        ],
+        "mutate_index": 3,
+        "mutate_fixed_len": 1,
+        "mutate_preserve_prefix": 12,
+        "mutate_preserve_suffix": 0,
+        "token_frame": 0,
+        "token_offset": 472,
+        "token_len": 4,
+        "sid_patches": CHAIN_SID_PATCHES,
+    },
 }
 
 
@@ -284,14 +492,25 @@ def c_bytes(blob: bytes) -> str:
     return textwrap.fill(items, width=100, subsequent_indent="    ")
 
 
-def load_c2d_frames(frame_path: Path) -> list[bytes]:
-    doc = json.loads(frame_path.read_text(encoding="utf-8"))
+@functools.lru_cache(maxsize=None)
+def load_c2d_frames(frame_path: str) -> list[bytes]:
+    doc = json.loads(Path(frame_path).read_text(encoding="utf-8"))
     frames = []
     for fr in doc["frames"]:
         if fr["direction"] != "C→D":
             continue
         frames.append(bytes.fromhex(fr["data_hex"]))
     return frames
+
+
+def load_mode_frames(frame_root: Path, spec: dict) -> list[bytes]:
+    if "frame_parts" in spec:
+        frames = []
+        for frame_file, c2d_index in spec["frame_parts"]:
+            c2d = load_c2d_frames(str(frame_root / frame_file))
+            frames.append(c2d[c2d_index])
+        return frames
+    return load_c2d_frames(str(frame_root / spec["frame_file"]))
 
 
 def main() -> int:
@@ -348,7 +567,7 @@ def main() -> int:
     mode_names: list[str] = []
     for mode_name, spec in MODE_SPECS.items():
         mode_names.append(mode_name)
-        frames = load_c2d_frames(frame_root / spec["frame_file"])
+        frames = load_mode_frames(frame_root, spec)
         frame_refs = []
         for idx, frame in enumerate(frames):
             arr_name = f"cm_net_{mode_name}_frame_{idx}_bytes"
